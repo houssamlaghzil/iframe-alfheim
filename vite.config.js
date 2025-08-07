@@ -1,20 +1,16 @@
-import { defineConfig } from 'vite';
+import { defineConfig } from 'vite';          // ← import manquant
 import react from '@vitejs/plugin-react';
+import tailwind from '@tailwindcss/vite';
 
 export default defineConfig({
-    plugins: [react()],
+    plugins: [
+        react(),
+        tailwind()
+    ],
     server: {
         proxy: {
-            /* API REST */
-            '/api': {
-                target: 'http://localhost:4000',
-                changeOrigin: true
-            },
-            /* 📂  Fichiers statiques (GLB) */
-            '/files': {
-                target: 'http://localhost:4000',
-                changeOrigin: true
-            }
+            '/api':   'http://localhost:4000',
+            '/files': 'http://localhost:4000'
         }
     }
 });
