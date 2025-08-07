@@ -9,9 +9,15 @@
     .btn-primary{ @apply inline-flex items-center justify-center px-4 py-2 rounded-md
     bg-violet-600 hover:bg-violet-500 text-white font-medium; }
 
-    .poi-popup{ @apply w-64 bg-white text-gray-900 p-3 rounded-lg shadow-lg space-y-2; } /* 16 rem */
-
+    /* pop-up élargie et positionnée */
+    .poi-popup{
+        @apply relative w-64 bg-white text-gray-900 p-4 rounded-lg shadow-xl space-y-3;
+    }
+    .poi-popup .input{
+        @apply w-full bg-gray-100 border border-gray-300 rounded-md px-2 py-1 text-sm;
+    }
 }
 
-@layer utilities { .page{ padding-top: calc(4rem + env(safe-area-inset-top)); } }
-
+@layer utilities {
+    .page{ padding-top: calc(4rem + env(safe-area-inset-top)); }
+}

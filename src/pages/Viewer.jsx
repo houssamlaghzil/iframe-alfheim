@@ -5,72 +5,82 @@ import { useEffect, useState, useRef } from 'react';
 import axios from 'axios';
 import ChatSidebar from '../components/ChatSidebar.jsx';
 import POIEditor from '../components/POIEditor.jsx';
+import * as THREE from 'three';
 
-function Model({ url, onClick }) {
-    const { scene } = useGLTF(url, true);
+function Model({ url, onClick, isEditMode }) {
+    const { scene, materials } = useGLTF(url, true);
+
+    useEffect(() => {
+        scene.traverse(obj => {
+            if (obj.isMesh) {
+                if (isEditMode) {
+                    obj.userData._origMaterial = obj.material;
+                    obj.material = new THREE.MeshBasicMaterial({ color: 0x777777 });
+                } else {
+                    if (obj.userData._origMaterial) {
+                        obj.material = obj.userData._origMaterial;
+                        delete obj.userData._origMaterial;
+                    }
+                }
+            }
+        });
+    }, [isEditMode, scene]);
+
     return <primitive object={scene} onClick={onClick} />;
 }
 
 export default function Viewer() {
     const { id } = useParams();
-    const [qs]    = useSearchParams();
-    const [env, setEnv]   = useState(null);
+    const [qs] = useSearchParams();
+    const [env, setEnv] = useState(null);
     const [pois, setPois] = useState([]);
     const [edit, setEdit] = useState(qs.has('edit'));
-
     const chatRef = useRef(null);
-    const poiRef  = useRef(null);
+    const poiRef = useRef(null);
 
-    /* charge env + POI au montage */
-    useEffect(()=>{
-        (async()=>{
-            const [e,p]=await Promise.all([
-                axios.get(`/api/environments/${id}`),
-                axios.get(`/api/environments/${id}/pois`)
-            ]);
-            setEnv(e.data);
-            setPois(p.data);
+    useEffect(() => {
+        (async () => {
+            try {
+                const e = await axios.get(`/api/environments/${id}`);
+                setEnv(e.data);
+            } catch { return; }
+            try {
+                const p = await axios.get(`/api/environments/${id}/pois`);
+                setPois(p.data);
+            } catch { setPois([]); }
         })();
-    },[id]);
+    }, [id]);
 
-    /* fonctions utilitaires */
-    const askIA = (t,d)=> chatRef.current?.send(`Peux-tu m’expliquer cela ?\n\n${t}\n${d}`);
-
-    const handleSceneClick = e => {
-        if (!edit || !e.point) return;
-        poiRef.current?.add(e.point);
-    };
+    const askIA = (t, d) => chatRef.current?.send(`Peux-tu m'expliquer cela ?\n\n${t}\n${d}`);
+    const onPOIs = updated => setPois(updated);
+    const addPOI = e => { if (edit && e.point) poiRef.current?.add(e.point); };
 
     if (!env) return <p className="p-8">Chargement…</p>;
 
     return (
         <div className="page flex flex-col lg:flex-row h-[calc(100vh-4rem)]">
             <div className="flex-1 relative">
-                <Canvas onPointerMissed={()=>setEdit(false)}>
-                    <ambientLight intensity={0.3}/>
-                    <directionalLight position={[3,4,2]} intensity={1.1}/>
-                    <hemisphereLight intensity={0.75}/>
-
-                    <Model url={env.fileUrl} onClick={handleSceneClick}/>
-                    <POIEditor ref={poiRef}
-                               envId={id}
-                               initial={pois}
-                               edit={edit}
-                               askIA={askIA}/>
-                    <OrbitControls/>
+                <Canvas>
+                    <hemisphereLight intensity={0.75} />
+                    <directionalLight position={[3,4,2]} intensity={1.1} />
+                    <ambientLight intensity={0.3} />
+                    <Model url={env.fileUrl} onClick={addPOI} isEditMode={edit} />
+                    <POIEditor ref={poiRef} envId={id} initial={pois}
+                               askIA={askIA} onChange={onPOIs} editMode={edit} />
+                    <OrbitControls />
                 </Canvas>
 
                 <div className="absolute top-4 inset-x-4 flex justify-between">
                     <h2 className="pointer-events-none text-xl font-semibold text-gray-900 bg-white/80 px-3 py-1 rounded-md shadow">
                         {env.title}
                     </h2>
-                    <button onClick={()=>setEdit(e=>!e)} className="btn-primary">
+                    <button onClick={() => setEdit(e => !e)} className="btn-primary">
                         {edit ? 'Quitter édition' : 'Activer édition'}
                     </button>
                 </div>
             </div>
 
-            <ChatSidebar ref={chatRef} env={env} pois={pois}/>
+            <ChatSidebar ref={chatRef} env={env} pois={pois} />
         </div>
     );
 }

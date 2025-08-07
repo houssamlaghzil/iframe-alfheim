@@ -1,6 +1,4 @@
 /* -------------------------------------------------------------------------- */
-/*  API Express (ESM)                                                         */
-/* -------------------------------------------------------------------------- */
 import express from 'express';
 import cors from 'cors';
 import multer from 'multer';
@@ -14,23 +12,46 @@ import OpenAI from 'openai';
 dotenv.config();
 const __dirname = path.resolve();
 
-/* ---------- Firebase ------------------------------------------------------ */
+/* Firebase ----------------------------------------------------------------- */
 initializeApp({ credential: cert(JSON.parse(process.env.FIREBASE_SA)) });
 const db = getFirestore();
 
-/* ---------- App & middleware --------------------------------------------- */
+/* App ---------------------------------------------------------------------- */
 const app = express();
 app.use(cors());
 app.use(express.json());
 
-/* ---------- Upload util (.glb) ------------------------------------------- */
+/* Upload (.glb) ------------------------------------------------------------ */
 const upload = multer({ dest: 'uploads/' });
 
 /* -------------------------------------------------------------------------- */
 /*  ROUTES                                                                    */
 /* -------------------------------------------------------------------------- */
 
-/* Environnements ----------------------------------------------------------- */
+/* ---------- POI (déclaré AVANT /:id) ------------------------------------- */
+app.get('/api/environments/:envId/pois', async (req, res) => {
+    try {
+        const snap = await db.collection(`environments/${req.params.envId}/pois`).get();
+        res.json(snap.docs.map(d => ({ id: d.id, ...d.data() })));
+    } catch {
+        res.json([]);                       // retourne tableau vide si env absente
+    }
+});
+
+app.post('/api/environments/:envId/pois', async (req, res) => {
+    try {
+        const data = { ...req.body, updatedAt: Date.now() };
+        const ref  = db.doc(`environments/${req.params.envId}/pois/${data.id}`);
+        await ref.set(data, { merge: true });
+        console.log('🔥 POI upsert', req.params.envId, data.id);
+        res.status(201).json({ id: ref.id });
+    } catch (e) {
+        console.error('POST /pois', e);
+        res.sendStatus(500);
+    }
+});
+
+/* ---------- ENVIRONNEMENTS ----------------------------------------------- */
 app.post('/api/environments', upload.single('file'), async (req, res) => {
     try {
         const { title, subtitle, description } = req.body;
@@ -39,18 +60,14 @@ app.post('/api/environments', upload.single('file'), async (req, res) => {
         const uploadsDir = path.join(__dirname, 'uploads');
         if (!fs.existsSync(uploadsDir)) fs.mkdirSync(uploadsDir);
 
-        const id = db.collection('environments').doc().id;
-        const fileName = `${id}-${req.file.originalname}`;
-        fs.renameSync(req.file.path, path.join(uploadsDir, fileName));
+        const id   = db.collection('environments').doc().id;
+        const file = `${id}-${req.file.originalname}`;
+        fs.renameSync(req.file.path, path.join(uploadsDir, file));
 
-        const doc = {
-            title, subtitle, description,
-            fileUrl: `/files/${fileName}`,
-            createdAt: Date.now()
-        };
+        const doc = { title, subtitle, description, fileUrl: `/files/${file}`, createdAt: Date.now() };
         await db.doc(`environments/${id}`).set(doc);
         res.status(201).json({ id, ...doc });
-    } catch (e) { console.error('POST /environments', e); res.sendStatus(500); }
+    } catch (e) { console.error(e); res.sendStatus(500); }
 });
 
 app.get('/api/environments', async (_, res) => {
@@ -59,25 +76,11 @@ app.get('/api/environments', async (_, res) => {
 });
 
 app.get('/api/environments/:id', async (req, res) => {
-    const d = await db.doc(`environments/${req.params.id}`).get();
-    res.json({ id: d.id, ...d.data() });
+    const doc = await db.doc(`environments/${req.params.id}`).get();
+    doc.exists ? res.json({ id: doc.id, ...doc.data() }) : res.sendStatus(404);
 });
 
-/* POI --------------------------------------------------------------------- */
-app.get('/api/environments/:id/pois', async (req, res) => {
-    const snap = await db.collection(`environments/${req.params.id}/pois`).get();
-    res.json(snap.docs.map(d => ({ id: d.id, ...d.data() })));
-});
-
-app.post('/api/environments/:id/pois', async (req, res) => {
-    try {
-        const ref = db.doc(`environments/${req.params.id}/pois/${req.body.id}`);
-        await ref.set(req.body, { merge: true });
-        res.status(201).json({ id: ref.id });
-    } catch (e) { console.error('POST /pois', e); res.sendStatus(500); }
-});
-
-/* Chat (proxy OpenAI) ------------------------------------------------------ */
+/* ---------- CHAT ---------------------------------------------------------- */
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 app.post('/api/chat', async (req, res) => {
     try {
@@ -89,7 +92,8 @@ app.post('/api/chat', async (req, res) => {
     } catch (e) { console.error('POST /chat', e); res.sendStatus(500); }
 });
 
-/* Static files (.glb) ------------------------------------------------------ */
+/* ---------- STATIC FILES (.glb) ------------------------------------------ */
 app.use('/files', express.static(path.join(__dirname, 'uploads')));
 
+/* -------------------------------------------------------------------------- */
 app.listen(4000, () => console.log('API → http://localhost:4000'));
