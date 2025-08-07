@@ -8,19 +8,22 @@ import POIEditor from '../components/POIEditor.jsx';
 import * as THREE from 'three';
 
 function Model({ url, onClick, isEditMode }) {
-    const { scene, materials } = useGLTF(url, true);
+    const { scene } = useGLTF(url, true);
 
     useEffect(() => {
         scene.traverse(obj => {
             if (obj.isMesh) {
                 if (isEditMode) {
                     obj.userData._origMaterial = obj.material;
-                    obj.material = new THREE.MeshBasicMaterial({ color: 0x777777 });
+                    obj.material = new THREE.MeshStandardMaterial({ color: 0x777777 });
+                    obj.castShadow = true;
+                    obj.receiveShadow = true;
                 } else {
                     if (obj.userData._origMaterial) {
                         obj.material = obj.userData._origMaterial;
                         delete obj.userData._origMaterial;
                     }
+                    obj.castShadow = false;
                 }
             }
         });
@@ -53,20 +56,27 @@ export default function Viewer() {
 
     const askIA = (t, d) => chatRef.current?.send(`Peux-tu m'expliquer cela ?\n\n${t}\n${d}`);
     const onPOIs = updated => setPois(updated);
-    const addPOI = e => { if (edit && e.point) poiRef.current?.add(e.point); };
+    const addPOI = e => { if (edit && e.point) poiRef.current?.add(e.point, e.face?.normal); };
 
     if (!env) return <p className="p-8">Chargement…</p>;
 
     return (
         <div className="page flex flex-col lg:flex-row h-[calc(100vh-4rem)]">
             <div className="flex-1 relative">
-                <Canvas>
-                    <hemisphereLight intensity={0.75} />
-                    <directionalLight position={[3,4,2]} intensity={1.1} />
+                <Canvas shadows>
+                    <hemisphereLight intensity={0.6} />
+                    <directionalLight
+                        position={[3, 4, 2]}
+                        intensity={1.0}
+                        castShadow
+                        shadow-mapSize-width={1024}
+                        shadow-mapSize-height={1024}
+                    />
                     <ambientLight intensity={0.3} />
+
                     <Model url={env.fileUrl} onClick={addPOI} isEditMode={edit} />
-                    <POIEditor ref={poiRef} envId={id} initial={pois}
-                               askIA={askIA} onChange={onPOIs} editMode={edit} />
+                    <POIEditor ref={poiRef} envId={id} initial={pois} askIA={askIA} onChange={onPOIs} editMode={edit} />
+
                     <OrbitControls />
                 </Canvas>
 
