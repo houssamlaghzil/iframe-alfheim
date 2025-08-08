@@ -6,7 +6,8 @@
     "dev": "vite",
     "build": "vite build",
     "preview": "vite preview",
-    "deploy": "bash scripts/deploy.sh"
+    "deploy": "bash scripts/deploy.sh",
+    "maj": "git pull && docker compose build --no-cache && docker compose up -d"
   },
   "dependencies": {
     "@react-three/drei": "^10.6.1",
