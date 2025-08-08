@@ -1,0 +1,25 @@
+services:
+  api:
+    build:
+      context: .
+      dockerfile: server/Dockerfile
+    container_name: alfheim-api
+    env_file:
+      - ./server/.env
+    volumes:
+      - uploads_data:/app/uploads
+    restart: unless-stopped
+
+  web:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: alfheim-web
+    depends_on:
+      - api
+    ports:
+      - "8081:80"   # <- port host; change-le si tu veux
+    restart: unless-stopped
+
+volumes:
+  uploads_data:
