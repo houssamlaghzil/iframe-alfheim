@@ -14,6 +14,7 @@ function ChatSidebar({ env, pois }, ref) {
     const [msgs, setMsgs] = useState([{ role: 'system', content: buildSystem(env, pois) }]);
     const [input, setInput] = useState('');
     const [open, setOpen] = useState(window.innerWidth >= 1024);
+    const [thinking, setThinking] = useState(false);
     const bottom = useRef(null);
 
     /* refresh contexte système */
@@ -21,7 +22,7 @@ function ChatSidebar({ env, pois }, ref) {
         setMsgs(m => [{ role: 'system', content: buildSystem(env, pois) }, ...m.filter(x => x.role !== 'system')]);
     }, [env, pois]);
 
-    useEffect(() => bottom.current?.scrollIntoView({ behavior: 'smooth' }), [msgs]);
+    useEffect(() => bottom.current?.scrollIntoView({ behavior: 'smooth' }), [msgs, thinking]);
 
     useImperativeHandle(ref, () => ({ send }));
 
@@ -32,45 +33,61 @@ function ChatSidebar({ env, pois }, ref) {
         setMsgs(next);
         if (!text) setInput('');
         try {
+            setThinking(true);
             const { data } = await axios.post('/api/chat', { messages: next });
             setMsgs([...next, data.choices[0].message]);
         } catch {
             setMsgs([...next, { role: 'assistant', content: 'Erreur réseau' }]);
+        } finally {
+            setThinking(false);
         }
     }
 
     return (
         <>
-            <button onClick={() => setOpen(o => !o)}
-                    className="lg:hidden fixed bottom-6 right-6 z-30 bg-violet-600 p-3 rounded-full shadow text-white">
+            <button onClick={() => setOpen(o => !o)} aria-label={open ? 'Fermer le chat' : 'Ouvrir le chat'}
+                    className="lg:hidden fixed bottom-6 right-6 z-30 btn-primary rounded-full p-3 shadow-lg">
                 {open ? '✕' : '💬'}
             </button>
 
             <aside className={`fixed lg:static top-0 right-0 h-full lg:h-auto w-full lg:w-80 max-w-full card flex flex-col
-                         transform ${open ? 'translate-x-0' : 'translate-x-full lg:translate-x-0'} transition`}>
-                <div className="flex items-center justify-between p-4 border-b border-[#262640]">
+                         transform ${open ? 'translate-x-0' : 'translate-x-full lg:translate-x-0'} transition`}
+                   aria-live="polite">
+                <div className="flex items-center justify-between p-4 border-b border-white/10">
                     <h3 className="font-semibold">Chat&nbsp;IA</h3>
-                    <button className="lg:hidden text-gray-400" onClick={() => setOpen(false)}>✕</button>
+                    <button className="lg:hidden btn-ghost h-8 px-2" onClick={() => setOpen(false)} aria-label="Fermer">✕</button>
                 </div>
 
-                <div className="flex-1 overflow-y-auto p-4 space-y-4 bg-white">
+                <div className="flex-1 overflow-y-auto p-4 space-y-4">
                     {msgs.filter(m => m.role !== 'system').map((m, i) => (
                         <div key={i} className={`flex ${m.role === 'user' ? 'justify-end' : 'justify-start'}`}>
-                            <p className={`max-w-[80%] whitespace-pre-wrap rounded-lg px-3 py-2 text-sm ${
-                                m.role === 'user' ? 'bg-violet-600 text-white' : 'bg-gray-100 text-gray-900'}`}>
+                            <p className={m.role === 'user' ? 'bubble-user' : 'bubble-ai'}>
                                 {m.content}
                             </p>
                         </div>
                     ))}
+                    {thinking && (
+                        <div className="flex justify-start">
+                            <p className="bubble-ai flex items-center">
+                                <span className="dot inline-block w-1.5 h-1.5 bg-white/70 rounded-full mx-0.5"></span>
+                                <span className="dot inline-block w-1.5 h-1.5 bg-white/70 rounded-full mx-0.5 [animation-delay:.15s]"></span>
+                                <span className="dot inline-block w-1.5 h-1.5 bg-white/70 rounded-full mx-0.5 [animation-delay:.3s]"></span>
+                            </p>
+                        </div>
+                    )}
                     <div ref={bottom} />
                 </div>
 
-                <div className="p-3 border-t border-[#262640] bg-gray-50 flex gap-2">
-          <textarea value={input} onChange={e => setInput(e.target.value)}
-                    onKeyDown={e => e.key === 'Enter' && !e.shiftKey && (e.preventDefault(), send())}
-                    rows="2" placeholder="Votre question…"
-                    className="flex-1 bg-white text-gray-900 border-gray-300 rounded-md px-3 py-2 resize-none"/>
-                    <button onClick={() => send()} className="btn-primary px-3 py-2">➤</button>
+                <div className="p-3 border-t border-white/10 bg-white/5 backdrop-blur supports-[backdrop-filter]:bg-white/5 flex gap-2">
+                    <textarea className="input resize-none border-t border-white/10 bg-white/5 backdrop-blur supports-[backdrop-filter]:bg-white/5 text-amber-50" value={input} onChange={e => setInput(e.target.value)}
+                              onKeyDown={e => e.key === 'Enter' && !e.shiftKey && (e.preventDefault(), send())}
+                              rows="2" placeholder="Votre question…"
+                              />
+                    <button onClick={() => send()} className="btn-primary px-3 py-2" aria-label="Envoyer">
+                        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" className="w-5 h-5">
+                            <path strokeLinecap="round" strokeLinejoin="round" d="M5 12h14M12 5l7 7-7 7" />
+                        </svg>
+                    </button>
                 </div>
             </aside>
         </>

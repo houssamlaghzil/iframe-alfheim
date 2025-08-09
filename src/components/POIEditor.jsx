@@ -23,7 +23,7 @@ function Popup({ poi, isEditing, onSave, onIA, onClose }) {
                 <>
                     <input className="input" value={title} placeholder="Titre" onChange={e => setTitle(e.target.value)} autoFocus />
                     <textarea className="input" rows="3" value={desc} placeholder="Description" onChange={e => setDesc(e.target.value)} />
-                    <label className="block text-xs pt-1 pb-1 text-gray-600">Taille : {size}</label>
+                    <label className="block text-xs pt-1 pb-1 text-gray-300">Taille : {size}</label>
                     <input type="range" min={1} max={5} step={0.1} value={size} onChange={e => setSize(Number(e.target.value))} className="w-full" />
                     <div className="flex gap-2 pt-1">
                         <button className="btn-primary flex-1" onClick={() => onSave(title, desc, size)}>Enregistrer</button>
@@ -33,8 +33,8 @@ function Popup({ poi, isEditing, onSave, onIA, onClose }) {
             ) : (
                 <>
                     <h4 className="font-semibold">{poi.label}</h4>
-                    <p className="text-sm text-gray-700 whitespace-pre-wrap">{poi.desc}</p>
-                    <div className="text-xs pt-1 pb-2 text-gray-600">Taille : {poi.size ?? 1}</div>
+                    <p className="text-sm text-gray-200 whitespace-pre-wrap">{poi.desc}</p>
+                    <div className="text-xs pt-1 pb-2 text-gray-300">Taille : {poi.size ?? 1}</div>
                     <button className="btn-primary w-full mt-1" onClick={() => onIA(poi.label, poi.desc)}>IA</button>
                 </>
             )}
@@ -172,7 +172,7 @@ const POIEditor = forwardRef(function POIEditor({ envId, initial, askIA, onChang
 
             {isEditing && (
                 <Html position={[0, 0, 0]} center>
-                    <div className="poi-popup bg-white/90 pointer-events-auto" style={{ width: 220 }}>
+                    <div className="poi-popup pointer-events-auto" style={{ width: 220 }}>
                         <label className="block text-xs pb-1 text-gray-600">
                             Taille du prochain POI : {sizePreview}
                         </label>
