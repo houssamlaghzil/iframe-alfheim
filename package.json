@@ -6,8 +6,19 @@
     "dev": "vite",
     "build": "vite build",
     "preview": "vite preview",
+
     "deploy": "bash scripts/deploy.sh",
-    "maj": "git pull && docker compose down && docker compose build --no-cache && docker compose up -d"
+
+    "maj": "git pull && docker compose up -d --build --remove-orphans",
+
+    "maj:web": "git pull && docker compose build --no-cache web && docker compose up -d web",
+
+    "maj:api": "git pull && docker compose build --no-cache api && docker compose up -d api",
+
+    "maj:hard": "git pull && docker compose down && docker compose build --no-cache && docker compose up -d",
+
+    "logs:web": "docker compose logs -f web",
+    "logs:api": "docker compose logs -f api"
   },
   "dependencies": {
     "@react-three/drei": "^10.6.1",
