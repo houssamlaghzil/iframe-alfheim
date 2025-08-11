@@ -37,19 +37,21 @@
         bg-violet-200 hover:bg-violet-300 font-semibold border border-violet-300
         shadow-[0_8px_20px_-12px_rgba(109,40,217,0.25)] transition-all active:scale-[0.98]
         focus:outline-none focus:ring-2 focus:ring-[--color-primary] focus:ring-offset-2;
-        color: #111827 !important; /* texte sombre prioritaire */
+        color: #111827 !important;
     }
     .btn-primary svg { stroke: currentColor; fill: none; }
 
     .btn-ghost {
         @apply inline-flex items-center justify-center gap-2 px-3 py-2 rounded-lg
         bg-black/5 hover:bg-black/10 border border-[--color-border] transition-colors;
-        color: #111827 !important; /* texte sombre */
+        color: #111827 !important;
     }
 
     /* Inputs */
-    .input { @apply w-full rounded-lg px-3 py-2 bg-[--color-surface] border border-[--color-border]
-    text-gray-900 placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-[--color-primary] focus:border-transparent; }
+    .input {
+        @apply w-full rounded-lg px-3 py-2 bg-[--color-surface] border border-[--color-border]
+        text-gray-900 placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-[--color-primary] focus:border-transparent;
+    }
 
     /* Surfaces */
     .glass { @apply bg-white/85 backdrop-blur-md border border-[--color-border]; }
@@ -59,24 +61,33 @@
 
     .overlay-gradient { @apply absolute inset-0 bg-gradient-to-t from-black/10 via-transparent to-transparent; }
 
-    /* Bulles de chat — TEXTE NOIR FORCÉ (y compris tout contenu interne) */
+    /* Bulles de chat — TEXTE NOIR (on ne @apply plus .bubble nulle part) */
     .bubble { @apply max-w-[80%] whitespace-pre-wrap rounded-2xl px-3 py-2 text-sm; }
 
     .bubble-user {
-        @apply bubble bg-violet-100 border border-violet-200;
+        @apply max-w-[80%] whitespace-pre-wrap rounded-2xl px-3 py-2 text-sm
+        bg-violet-100 border border-violet-200;
         color: #000 !important;
     }
-    .bubble-user * { color: #000 !important; }  /* si un span/strong hérite d'un blanc */
+    .bubble-user * { color: #000 !important; }
 
     .bubble-ai {
-        @apply bubble bg-gray-100 border border-[--color-border];
+        @apply max-w-[80%] whitespace-pre-wrap rounded-2xl px-3 py-2 text-sm
+        bg-gray-100 border border-[--color-border];
         color: #000 !important;
     }
     .bubble-ai * { color: #000 !important; }
 
     /* Popup POI claire */
-    .poi-popup { @apply relative w-64 bg-white text-gray-900 p-4 rounded-xl shadow-xl space-y-3 border border-[--color-border]; }
-    .poi-popup .input { @apply input text-sm; }
+    .poi-popup {
+        @apply relative w-64 bg-white text-gray-900 p-4 rounded-xl shadow-xl space-y-3 border border-[--color-border];
+    }
+
+    /* ⚠️ Remplacement de `@apply input text-sm` par les utilitaires équivalents */
+    .poi-popup .input {
+        @apply w-full rounded-lg px-3 py-2 bg-[--color-surface] border border-[--color-border]
+        text-gray-900 placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-[--color-primary] focus:border-transparent text-sm;
+    }
 }
 
 /* ===== Utilitaires ===== */
