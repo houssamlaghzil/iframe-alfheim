@@ -80,11 +80,11 @@ export default function Viewer() {
                     <OrbitControls />
                 </Canvas>
 
-                <div className="absolute top-4 inset-x-4 flex justify-between">
-                    <h2 className="pointer-events-none text-xl font-semibold text-gray-900 bg-white/80 px-3 py-1 rounded-md shadow">
+                <div className="absolute top-4 inset-x-4 flex items-center justify-between gap-3 z-10">
+                    <h2 className="pointer-events-none text-lg font-semibold glass px-3 py-1.5 rounded-xl shadow brand-gradient-text">
                         {env.title}
                     </h2>
-                    <button onClick={() => setEdit(e => !e)} className="btn-primary">
+                    <button onClick={() => setEdit(e => !e)} className="btn-primary h-9 px-3">
                         {edit ? 'Quitter édition' : 'Activer édition'}
                     </button>
                 </div>
