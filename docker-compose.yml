@@ -6,6 +6,8 @@ services:
     container_name: alfheim-api
     env_file:
       - ./server/.env
+    ports:
+      - "4000:4000"
     volumes:
       - uploads_data:/app/uploads
     restart: unless-stopped
