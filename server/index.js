@@ -1,4 +1,3 @@
-/* -------------------------------------------------------------------------- */
 import express from 'express';
 import cors from 'cors';
 import multer from 'multer';
@@ -19,10 +18,16 @@ const db = getFirestore();
 /* App ---------------------------------------------------------------------- */
 const app = express();
 app.use(cors());
-app.use(express.json());
+
+// Autoriser jusqu'à 1 Go pour les JSON et les formulaires
+app.use(express.json({ limit: '1024mb' }));
+app.use(express.urlencoded({ limit: '1024mb', extended: true }));
 
 /* Upload (.glb) ------------------------------------------------------------ */
-const upload = multer({ dest: 'uploads/' });
+const upload = multer({
+    dest: 'uploads/',
+    limits: { fileSize: 1024 * 1024 * 1024 } // 1 Go
+});
 
 /* -------------------------------------------------------------------------- */
 /*  ROUTES                                                                    */
@@ -34,7 +39,7 @@ app.get('/api/environments/:envId/pois', async (req, res) => {
         const snap = await db.collection(`environments/${req.params.envId}/pois`).get();
         res.json(snap.docs.map(d => ({ id: d.id, ...d.data() })));
     } catch {
-        res.json([]);                       // retourne tableau vide si env absente
+        res.json([]);
     }
 });
 
@@ -67,7 +72,10 @@ app.post('/api/environments', upload.single('file'), async (req, res) => {
         const doc = { title, subtitle, description, fileUrl: `/files/${file}`, createdAt: Date.now() };
         await db.doc(`environments/${id}`).set(doc);
         res.status(201).json({ id, ...doc });
-    } catch (e) { console.error(e); res.sendStatus(500); }
+    } catch (e) {
+        console.error(e);
+        res.sendStatus(500);
+    }
 });
 
 app.get('/api/environments', async (_, res) => {
@@ -89,7 +97,10 @@ app.post('/api/chat', async (req, res) => {
             messages: req.body.messages
         });
         res.json(completion);
-    } catch (e) { console.error('POST /chat', e); res.sendStatus(500); }
+    } catch (e) {
+        console.error('POST /chat', e);
+        res.sendStatus(500);
+    }
 });
 
 /* ---------- STATIC FILES (.glb) ------------------------------------------ */
