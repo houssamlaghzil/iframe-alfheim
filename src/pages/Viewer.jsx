@@ -58,12 +58,15 @@ export default function Viewer() {
     const onPOIs = updated => setPois(updated);
     const addPOI = e => { if (edit && e.point) poiRef.current?.add(e.point, e.face?.normal); };
 
-    if (!env) return <p className="p-8">Chargement…</p>;
+    if (!env) return <p className="p-8 text-gray-900">Chargement…</p>;
 
     return (
         <div className="page flex flex-col lg:flex-row h-[calc(100vh-4rem)]">
             <div className="flex-1 relative">
                 <Canvas shadows>
+                    {/* Fond blanc du rendu 3D */}
+                    <color attach="background" args={['#ffffff']} />
+
                     <hemisphereLight intensity={0.6} />
                     <directionalLight
                         position={[3, 4, 2]}
@@ -81,10 +84,11 @@ export default function Viewer() {
                 </Canvas>
 
                 <div className="absolute top-4 inset-x-4 flex items-center justify-between gap-3 z-10">
-                    <h2 className="pointer-events-none text-lg font-semibold glass px-3 py-1.5 rounded-xl shadow brand-gradient-text">
+                    <h2 className="pointer-events-none text-lg font-semibold bg-white/90 text-gray-900 px-3 py-1.5 rounded-xl shadow border border-[--color-border]">
                         {env.title}
                     </h2>
-                    <button onClick={() => setEdit(e => !e)} className="btn-primary h-9 px-3">
+                    {/* Texte sombre explicite pour éviter toute régression */}
+                    <button onClick={() => setEdit(e => !e)} className="btn-primary h-9 px-3 text-gray-900">
                         {edit ? 'Quitter édition' : 'Activer édition'}
                     </button>
                 </div>

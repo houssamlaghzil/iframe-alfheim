@@ -85,7 +85,7 @@ const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 app.post('/api/chat', async (req, res) => {
     try {
         const completion = await openai.chat.completions.create({
-            model: 'gpt-4o-mini',
+            model: 'gpt-5-nano-2025-08-07',
             messages: req.body.messages
         });
         res.json(completion);
