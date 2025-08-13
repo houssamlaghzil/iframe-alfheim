@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef, forwardRef, useImperativeHandle } from 'react';
 import axios from 'axios';
 
+/* Construit le message système pour l'IA */
 function buildSystem(env, pois) {
     if (!env) return 'You are Alfheim, a 3D assistant.';
     const header = `ENVIRONMENT:\n${env.title}\n${env.description ?? ''}`;
@@ -16,6 +17,9 @@ function ChatSidebar({ env, pois }, ref) {
     const [open, setOpen] = useState(window.innerWidth >= 1024);
     const [thinking, setThinking] = useState(false);
     const bottom = useRef(null);
+
+    // NEW: ref pour mesurer la largeur réelle du chat (desktop) et mettre à jour les variables CSS
+    const asideRef = useRef(null);
 
     useEffect(() => {
         setMsgs(m => [{ role: 'system', content: buildSystem(env, pois) }, ...m.filter(x => x.role !== 'system')]);
@@ -42,8 +46,72 @@ function ChatSidebar({ env, pois }, ref) {
         }
     }
 
+    /* =========================================================
+     *  MISE À JOUR DU LAYOUT (desktop & mobile)
+     *  - Définit des variables CSS :
+     *      --chat-width: largeur utile du chat (desktop uniquement)
+     *      --chat-open: 0/1
+     *      --chat-is-overlay: 0/1 (mobile/tablette quand le chat slide en overlay)
+     *      --chat-drawer-width: largeur du drawer overlay (mobile)
+     *  - Ajoute des classes <body> pour simplifier les règles CSS:
+     *      body.chat-open .chat-overlay
+     * ========================================================= */
+    useEffect(() => {
+        const root = document.documentElement;
+
+        const updateLayout = () => {
+            const isOverlay = window.innerWidth < 1024; // <lg => overlay
+            const measured = asideRef.current ? asideRef.current.offsetWidth : 0;
+
+            // --chat-width n'est utile qu'en desktop (le chat est "dans" la grille)
+            const chatWidth = (!isOverlay && open) ? measured : 0;
+            root.style.setProperty('--chat-width', `${chatWidth}px`);
+            root.style.setProperty('--chat-open', open ? '1' : '0');
+            root.style.setProperty('--chat-is-overlay', (isOverlay && open) ? '1' : '0');
+            root.style.setProperty('--chat-drawer-width', (isOverlay && open) ? `${measured}px` : '0px');
+
+            // Classes sur <body> pour règles ciblées
+            document.body.classList.toggle('chat-open', open);
+            document.body.classList.toggle('chat-overlay', isOverlay && open);
+
+            console.log('[ChatSidebar] layout update', {
+                open,
+                isOverlay,
+                measuredWidth: measured,
+                css: {
+                    chatWidth: root.style.getPropertyValue('--chat-width'),
+                    chatOpen: root.style.getPropertyValue('--chat-open'),
+                    chatIsOverlay: root.style.getPropertyValue('--chat-is-overlay'),
+                    chatDrawerWidth: root.style.getPropertyValue('--chat-drawer-width'),
+                }
+            });
+        };
+
+        // 1) mise à jour immédiate
+        updateLayout();
+
+        // 2) observe la taille réelle de l’aside (utile quand scrollbars/chrome changent)
+        const ro = new ResizeObserver(() => updateLayout());
+        if (asideRef.current) ro.observe(asideRef.current);
+
+        // 3) réagit aux resize fenêtrés
+        window.addEventListener('resize', updateLayout);
+
+        return () => {
+            window.removeEventListener('resize', updateLayout);
+            ro.disconnect();
+            // Nettoyage des classes/vars si le composant se démonte
+            document.body.classList.remove('chat-open', 'chat-overlay');
+            root.style.removeProperty('--chat-width');
+            root.style.removeProperty('--chat-open');
+            root.style.removeProperty('--chat-is-overlay');
+            root.style.removeProperty('--chat-drawer-width');
+        };
+    }, [open]);
+
     return (
         <>
+            {/* Bouton flottant (mobile) */}
             <button
                 onClick={() => setOpen(o => !o)}
                 aria-label={open ? 'Fermer le chat' : 'Ouvrir le chat'}
@@ -52,7 +120,9 @@ function ChatSidebar({ env, pois }, ref) {
                 {open ? '✕' : '💬'}
             </button>
 
+            {/* Panneau chat */}
             <aside
+                ref={asideRef}
                 className={`fixed lg:static top-0 right-0 h-full lg:h-auto w-full lg:w-80 max-w-full card flex flex-col
                    transform ${open ? 'translate-x-0' : 'translate-x-full lg:translate-x-0'} transition`}
                 aria-live="polite"
@@ -65,7 +135,6 @@ function ChatSidebar({ env, pois }, ref) {
                 <div className="flex-1 overflow-y-auto p-4 space-y-4">
                     {msgs.filter(m => m.role !== 'system').map((m, i) => (
                         <div key={i} className={`flex ${m.role === 'user' ? 'justify-end' : 'justify-start'}`}>
-                            {/* Ajout de text-gray-900 pour forcer côté utilitaire (chargé après components) */}
                             <p className={`${m.role === 'user' ? 'bubble-user' : 'bubble-ai'} text-gray-900`}>
                                 {m.content}
                             </p>
@@ -92,7 +161,6 @@ function ChatSidebar({ env, pois }, ref) {
               rows="2"
               placeholder="Votre question…"
           />
-                    {/* Texte sombre explicite + icône hérite de la couleur */}
                     <button onClick={() => send()} className="btn-primary px-3 py-2 text-gray-900" aria-label="Envoyer">
                         <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" className="w-5 h-5">
                             <path strokeLinecap="round" strokeLinejoin="round" d="M5 12h14M12 5l7 7-7 7" />

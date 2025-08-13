@@ -102,3 +102,45 @@
     @keyframes typing { 0%{opacity:.2} 50%{opacity:1} 100%{opacity:.2} }
     .dot { animation: typing 1s infinite; }
 }
+
+/* ===== Variables globales pour le layout chat/toolbar ===== */
+:root{
+    --chat-width: 0px;         /* largeur du chat sur desktop (sinon 0) */
+    --chat-open: 0;            /* 0/1 */
+    --chat-is-overlay: 0;      /* 0/1 quand le chat est en overlay (mobile) */
+    --chat-drawer-width: 0px;  /* largeur du drawer mobile (souvent ~100vw) */
+}
+
+/* ===== Toolbar éditeur : position overlay bas-droite sans chevauchement =====
+   - Desktop (≥1024px) : on pousse la toolbar à gauche du chat via --chat-width
+   - Mobile (<1024px) : bottom-right par défaut; si le chat est un overlay ouvert,
+     on bascule à gauche (pour qu’elle reste visible). */
+.editor-toolbar{
+    position: absolute;
+    z-index: 25;            /* au-dessus du Canvas/POIs ; inférieur à des modals */
+    pointer-events: none;   /* les clics ne traversent que le conteneur interne */
+}
+.editor-toolbar > *{ pointer-events: auto; } /* réactiver les clics sur le contenu */
+
+/* Desktop */
+@media (min-width: 1024px){
+    .editor-toolbar{
+        right: calc(var(--chat-width, 0px) + 16px);
+        bottom: 16px;
+    }
+}
+
+/* Mobile / tablette */
+@media (max-width: 1023.98px){
+    .editor-toolbar{
+        right: 16px;
+        bottom: calc(env(safe-area-inset-bottom, 0px) + 16px);
+    }
+
+    /* Quand le chat overlay est ouvert, on déplace la toolbar sur la gauche.
+       On utilise des classes posées par ChatSidebar sur <body>. */
+    body.chat-open.chat-overlay .editor-toolbar{
+        left: 16px;
+        right: auto;
+    }
+}

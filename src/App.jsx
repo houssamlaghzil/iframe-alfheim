@@ -6,7 +6,7 @@ import CreateEnv from './pages/CreateEnv.jsx';
 export default function App() {
     return (
         <>
-            {/* Barre du haut : blanche + bordure claire */}
+            {/* Barre du haut : blanche + bordure claire
             <header className="sticky top-0 z-20 bg-white border-b border-[--color-border]">
                 <nav className="max-w-7xl mx-auto px-4 h-16 flex items-center justify-between">
                     <h1 className="text-xl font-bold text-gray-900">Alfheim 3D</h1>
@@ -31,7 +31,7 @@ export default function App() {
                     </div>
                 </nav>
             </header>
-
+            */}
             <Routes>
                 <Route path="/"          element={<ModelList />} />
                 <Route path="/new"       element={<CreateEnv />} />
