@@ -25,6 +25,7 @@ if (!process.env.FIREBASE_SA) {
     errlog('BOOT', 'FIREBASE_SA manquant dans .env');
     process.exit(1);
 }
+
 let serviceAccount;
 try {
     serviceAccount = JSON.parse(process.env.FIREBASE_SA);
@@ -38,16 +39,16 @@ log('BOOT', `Project: ${serviceAccount.project_id}`);
 if (providedBucket) log('BOOT', `Bucket .env: ${providedBucket}`);
 else warn('BOOT', 'FIREBASE_STORAGE_BUCKET non fourni — tentative de détection');
 
-/* ----------------------- FIREBASE ADMIN (sans bucket par défaut) ----------------------- */
+/* ----------------------- FIREBASE ADMIN ----------------------- */
 initializeApp({ credential: cert(serviceAccount) });
 const db = getFirestore();
 const storage = getStorage();
 
-/* ----------------------- BUCKET DETECTION ----------------------- */
-const candidateBuckets = [
-    providedBucket, // priorité à ce que tu fournis
-    `${serviceAccount.project_id}.firebasestorage.app`, // nouveau format (post-2024)
-    `${serviceAccount.project_id}.appspot.com`,        // ancien format
+/* ----------------------- BUCKET RESOLUTION ----------------------- */
+const candidates = [
+    providedBucket,
+    `${serviceAccount.project_id}.firebasestorage.app`,
+    `${serviceAccount.project_id}.appspot.com`,
 ].filter(Boolean);
 
 let selectedBucket = null;
@@ -66,7 +67,7 @@ async function checkBucket(name) {
 }
 
 async function resolveBucket() {
-    for (const name of candidateBuckets) {
+    for (const name of candidates) {
         const r = await checkBucket(name);
         log('STORAGE', `probe ${name} → exists=${r.exists}`);
         if (r.exists) {
@@ -80,8 +81,7 @@ async function resolveBucket() {
             return;
         }
     }
-    errlog('STORAGE', 'Aucun bucket trouvé parmi', candidateBuckets);
-    errlog('STORAGE', 'Active Firebase Storage dans la console, puis relance le serveur.');
+    errlog('STORAGE', 'Aucun bucket valide détecté', candidates);
 }
 
 /* ----------------------- EXPRESS ----------------------- */
@@ -129,7 +129,7 @@ app.get('/healthz', (_req, res) => {
 
 app.get('/debug/storage', async (_req, res) => {
     const results = [];
-    for (const name of candidateBuckets) {
+    for (const name of candidates) {
         // eslint-disable-next-line no-await-in-loop
         const r = await checkBucket(name);
         results.push({ name, exists: r.exists, error: r.error || null, location: r.meta?.location || null });
@@ -141,6 +141,32 @@ app.get('/debug/storage', async (_req, res) => {
             ? 'Active Firebase Storage dans la console → Storage → Get started. Le nom exact apparaît sous la forme gs://<nom>.'
             : 'OK',
     });
+});
+
+/* ----------------------- (Optionnel) SET CORS SUR BUCKET -----------------------
+   Utile si tu veux conserver les signed URLs GCS (storage.googleapis.com).
+   S’il te faut cette option A), appelle POST /debug/set-cors une fois. */
+app.post('/debug/set-cors', async (req, res) => {
+    try {
+        if (!selectedBucket) return res.status(500).json({ error: 'Bucket non sélectionné' });
+        const origins = [
+            'https://alfheim.promete.tech',
+            'http://localhost:5173',
+            'http://localhost:3000',
+        ];
+        await selectedBucket.setCors([{
+            origin: origins,
+            method: ['GET', 'HEAD', 'OPTIONS'],
+            responseHeader: ['Content-Type'],
+            maxAgeSeconds: 3600,
+        }]);
+        const [meta] = await selectedBucket.getMetadata();
+        log('CORS', 'CORS appliqué', meta.cors || []);
+        res.json({ ok: true, cors: meta.cors || [] });
+    } catch (e) {
+        errlog('CORS', 'set-cors failed', e);
+        res.status(500).json({ error: e?.message || 'CORS set failed' });
+    }
 });
 
 /* ----------------------- POIs ----------------------- */
@@ -167,7 +193,10 @@ app.post('/api/environments/:envId/pois', async (req, res) => {
     }
 });
 
-/* ----------------------- ENVIRONMENTS + UPLOAD ----------------------- */
+/* ----------------------- ENVIRONMENTS + UPLOAD -----------------------
+   FIX CORS : on génère un token Firebase et on renvoie l’URL:
+   https://firebasestorage.googleapis.com/v0/b/<bucket>/o/<path>?alt=media&token=<token>
+   => CORS OK pour fetch() et useGLTF() */
 app.post('/api/environments', upload.single('file'), async (req, res) => {
     const scope = 'ENV_UP';
     try {
@@ -187,6 +216,7 @@ app.post('/api/environments', upload.single('file'), async (req, res) => {
         const name = safeFileName(original.endsWith('.glb') ? original : `${original}.glb`);
         const dstPath = `${CLIENT_ID}/models/${Date.now()}-${name}`;
 
+        const token = randomUUID(); // token de téléchargement Firebase
         log(scope, `upload → ${selectedBucket.name}/${dstPath}`, {
             size: req.file.size,
             mime: req.file.mimetype,
@@ -196,23 +226,32 @@ app.post('/api/environments', upload.single('file'), async (req, res) => {
         await gcsFile.save(req.file.buffer, {
             contentType: 'model/gltf-binary',
             resumable: false,
-            metadata: { cacheControl: 'public, max-age=31536000, immutable' },
+            metadata: {
+                cacheControl: 'public, max-age=31536000, immutable',
+                metadata: { firebaseStorageDownloadTokens: token },
+            },
         });
 
-        const [signedUrl] = await gcsFile.getSignedUrl({
-            action: 'read',
-            expires: Date.now() + 1000 * 60 * 60 * 24 * 365, // ~1 an
-        });
+        // URL Firebase (CORS OK)
+        const encodedPath = encodeURIComponent(dstPath);
+        const firebaseUrl = `https://firebasestorage.googleapis.com/v0/b/${selectedBucket.name}/o/${encodedPath}?alt=media&token=${token}`;
+
+        // (optionnel) aussi une signed URL GCS si tu en as besoin ailleurs (mais CORS à configurer si fetch côté client)
+        // const [signedUrl] = await gcsFile.getSignedUrl({
+        //   action: 'read',
+        //   expires: Date.now() + 1000 * 60 * 60 * 24 * 365,
+        // });
 
         const doc = {
             title, subtitle, description,
-            fileUrl: signedUrl,
+            fileUrl: firebaseUrl,     // <= utilise ça côté front/useGLTF
+            // signedUrl,             // <= décommente si tu veux aussi la version GCS
             storagePath: dstPath,
             createdAt: Date.now(),
         };
         await db.doc(pathFor('environments', id)).set(doc);
 
-        log(scope, `done id=${id} urlLen=${signedUrl.length}`);
+        log(scope, `done id=${id} urlLen=${firebaseUrl.length}`);
         res.status(201).json({ id, ...doc });
     } catch (e) {
         errlog('ENV_UP', 'upload failed', e);
@@ -220,6 +259,7 @@ app.post('/api/environments', upload.single('file'), async (req, res) => {
     }
 });
 
+/* ----------------------- LECTURE LIST/GET ----------------------- */
 app.get('/api/environments', async (_req, res) => {
     try {
         const snap = await db.collection(pathFor('environments')).get();
@@ -238,6 +278,36 @@ app.get('/api/environments/:id', async (req, res) => {
     } catch (e) {
         errlog('ENV', 'get error', e);
         res.sendStatus(500);
+    }
+});
+
+/* ----------------------- (Optionnel) PROXY DE SECOURS -----------------------
+   Si vraiment nécessaire, tu peux charger le GLB via ton domaine :
+   /api/proxy-model?path=clients/<CLIENT_ID>/models/xxx.glb
+   → ajoute CORS: * (mais attention au coût bande passante serveur) */
+app.get('/api/proxy-model', async (req, res) => {
+    try {
+        if (!selectedBucket) return res.status(500).send('Bucket non sélectionné');
+        const path = String(req.query.path || '');
+        if (!path || path.includes('..')) return res.status(400).send('path invalide');
+
+        const file = selectedBucket.file(path);
+        const [exists] = await file.exists();
+        if (!exists) return res.status(404).send('Not found');
+
+        res.setHeader('Access-Control-Allow-Origin', '*');
+        res.setHeader('Content-Type', 'model/gltf-binary');
+        res.setHeader('Cache-Control', 'public, max-age=31536000, immutable');
+
+        file.createReadStream({ validation: false })
+            .on('error', (e) => {
+                errlog('PROXY', 'stream error', e);
+                res.destroy(e);
+            })
+            .pipe(res);
+    } catch (e) {
+        errlog('PROXY', 'failed', e);
+        res.status(500).send('proxy error');
     }
 });
 
