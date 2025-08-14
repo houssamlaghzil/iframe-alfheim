@@ -1,0 +1,467 @@
+From 10e9e5f0d1bb4a8b283108b8545de0d3a9648ad9 Mon Sep 17 00:00:00 2001
+From: Your Name <you@example.com>
+Date: Thu, 14 Aug 2025 13:55:34 +0000
+Subject: [PATCH] =?UTF-8?q?feat:=20am=C3=A9liorations=20visuelles=20et=20f?=
+ =?UTF-8?q?onctionnelles?=
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+---
+ src/App.jsx                    |  45 ++++++
+ src/components/ChatSidebar.jsx | 284 +++++++++++++++++++++++++++++++++
+ src/pages/ModelList.jsx        |  96 +++++++++++
+ 3 files changed, 425 insertions(+)
+ create mode 100644 src/App.jsx
+ create mode 100644 src/components/ChatSidebar.jsx
+ create mode 100644 src/pages/ModelList.jsx
+
+diff --git a/src/App.jsx b/src/App.jsx
+new file mode 100644
+index 0000000..cae303f
+--- /dev/null
++++ b/src/App.jsx
+@@ -0,0 +1,45 @@
++import { NavLink, Route, Routes } from 'react-router-dom';
++import ModelList from './pages/ModelList.jsx';
++import Viewer from './pages/Viewer.jsx';
++import CreateEnv from './pages/CreateEnv.jsx';
++
++// Composant racine de l'application. On affiche une barre de navigation en haut
++// avec des liens vers la galerie et la page de création. Ensuite, on délègue
++// l'affichage des différentes pages via le router.
++export default function App() {
++    return (
++        <>
++            {/* Barre du haut : navigation principale */}
++            <header className="sticky top-0 z-20 bg-white/90 backdrop-blur border-b border-[--color-border]">
++                <nav className="max-w-7xl mx-auto px-4 h-16 flex items-center justify-between">
++                    <h1 className="text-xl font-bold text-gray-900">Alfheim 3D</h1>
++                    <div className="hidden md:flex gap-2 text-sm">
++                        <NavLink
++                            to="/"
++                            className={({ isActive }) =>
++                                `btn-ghost h-9 px-3 text-gray-900 ${isActive ? 'ring-1 ring-black/15' : ''}`
++                            }
++                        >
++                            Galeries
++                        </NavLink>
++                        <NavLink
++                            to="/new"
++                            className={({ isActive }) =>
++                                `btn-primary h-9 px-3 text-gray-900 ${isActive ? 'outline outline-1 outline-black/20' : ''}`
++                            }
++                        >
++                            + Nouveau
++                        </NavLink>
++                    </div>
++                </nav>
++            </header>
++
++            {/* Routage : on affiche le composant associé à l'URL */}
++            <Routes>
++                <Route path="/"          element={<ModelList />} />
++                <Route path="/new"       element={<CreateEnv />} />
++                <Route path="/model/:id" element={<Viewer />} />
++            </Routes>
++        </>
++    );
++}
+\ No newline at end of file
+diff --git a/src/components/ChatSidebar.jsx b/src/components/ChatSidebar.jsx
+new file mode 100644
+index 0000000..f91ddc1
+--- /dev/null
++++ b/src/components/ChatSidebar.jsx
+@@ -0,0 +1,284 @@
++import { useState, useEffect, useRef, forwardRef, useImperativeHandle } from 'react';
++import axios from 'axios';
++
++/* ------------------------------------------------------------------
++ * ChatSidebar
++ *
++ * Cette version améliore l'ergonomie du composant existant :
++ *  - barre de navigation réactive (ouvre/ferme le panneau)
++ *  - bouton pour réinitialiser la conversation sans perdre le contexte système
++ *  - bouton de copie pour chaque réponse de l'IA
++ *  - gestion responsive conservée (variables CSS, overlay mobile)
++ *  - effet confetti conservé sur double‑clic de la capsule marketing
++ */
++
++/* Construit le message système pour l'IA en fonction de l'environnement et des POIs */
++function buildSystem(env, pois) {
++    if (!env) return 'You are Alfheim, a 3D assistant.';
++    const header = `ENVIRONMENT:\n${env.title}\n${env.description ?? ''}`;
++    const poiTxt = pois?.length
++        ? '\n\nPOINTS OF INTEREST:\n' + pois.map((p) => `• ${p.label}: ${p.desc}`).join('\n')
++        : '';
++    return `${header}${poiTxt}`;
++}
++
++/* Confetti minimaliste (canvas) — couleurs froides (violet/indigo/noir) */
++function fireConfettiFromRect(rect) {
++    try {
++        const dpr = Math.max(1, window.devicePixelRatio || 1);
++        const canvas = document.createElement('canvas');
++        canvas.width = Math.floor(window.innerWidth * dpr);
++        canvas.height = Math.floor(window.innerHeight * dpr);
++        Object.assign(canvas.style, {
++            position: 'fixed',
++            inset: '0',
++            width: '100vw',
++            height: '100vh',
++            zIndex: '9999',
++            pointerEvents: 'none'
++        });
++        document.body.appendChild(canvas);
++        const ctx = canvas.getContext('2d');
++        const originX = ((rect.left + rect.right) / 2) * dpr;
++        const originY = ((rect.top + rect.bottom) / 2) * dpr;
++        const particles = [];
++        const count = 140;
++        const colors = ['#7c3aed', '#8b5cf6', '#a78bfa', '#6366f1', '#0ea5e9', '#111827'];
++        for (let i = 0; i < count; i++) {
++            const angle = Math.random() * Math.PI * 2;
++            const speed = 3 + Math.random() * 5;
++            particles.push({
++                x: originX,
++                y: originY,
++                vx: Math.cos(angle) * speed,
++                vy: Math.sin(angle) * speed - 6,
++                g: 0.22,
++                s: 2 + Math.random() * 3,
++                a: Math.random() * Math.PI,
++                w: (Math.random() * 0.2 + 0.05) * (Math.random() < 0.5 ? 1 : -1),
++                life: 60 + Math.floor(Math.random() * 40),
++                color: colors[Math.floor(Math.random() * colors.length)]
++            });
++        }
++        let frame = 0;
++        let raf = null;
++        const draw = () => {
++            frame++;
++            ctx.clearRect(0, 0, canvas.width, canvas.height);
++            for (const p of particles) {
++                if (p.life <= 0) continue;
++                p.vy += p.g;
++                p.x += p.vx;
++                p.y += p.vy;
++                p.a += p.w;
++                p.life--;
++                ctx.save();
++                ctx.translate(p.x, p.y);
++                ctx.rotate(p.a);
++                ctx.fillStyle = p.color;
++                ctx.fillRect(-p.s, -p.s * 0.5, p.s * 2, p.s);
++                ctx.restore();
++            }
++            if (frame < 120) {
++                raf = requestAnimationFrame(draw);
++            } else {
++                cancelAnimationFrame(raf);
++                canvas.remove();
++            }
++        };
++        draw();
++    } catch (e) {
++        console.warn('[Confetti] fallback (désactivé):', e);
++    }
++}
++
++function ChatSidebar({ env, pois }, ref) {
++    const [msgs, setMsgs] = useState([{ role: 'system', content: buildSystem(env, pois) }]);
++    const [input, setInput] = useState('');
++    const [open, setOpen] = useState(() => window.innerWidth >= 1024);
++    const [thinking, setThinking] = useState(false);
++    const bottom = useRef(null);
++    const asideRef = useRef(null);
++
++    // Met à jour le message système lorsque l'environnement ou les POI changent
++    useEffect(() => {
++        setMsgs((m) => [{ role: 'system', content: buildSystem(env, pois) }, ...m.filter((x) => x.role !== 'system')]);
++    }, [env, pois]);
++
++    // Scroll automatiquement en bas lorsqu'un message arrive
++    useEffect(() => {
++        bottom.current?.scrollIntoView({ behavior: 'smooth' });
++    }, [msgs, thinking]);
++
++    // Expose les méthodes send/clear au parent via useImperativeHandle
++    useImperativeHandle(ref, () => ({ send, clear: clearChat }));
++
++    // Gestion du layout responsive à l'ouverture/fermeture
++    useEffect(() => {
++        const root = document.documentElement;
++        const updateLayout = () => {
++            const isOverlay = window.innerWidth < 1024;
++            const measured = asideRef.current ? asideRef.current.offsetWidth : 0;
++            const chatWidth = !isOverlay && open ? measured : 0;
++            root.style.setProperty('--chat-width', `${chatWidth}px`);
++            root.style.setProperty('--chat-open', open ? '1' : '0');
++            root.style.setProperty('--chat-is-overlay', isOverlay && open ? '1' : '0');
++            root.style.setProperty('--chat-drawer-width', isOverlay && open ? `${measured}px` : '0px');
++            document.body.classList.toggle('chat-open', open);
++            document.body.classList.toggle('chat-overlay', isOverlay && open);
++        };
++        updateLayout();
++        const ro = new ResizeObserver(() => updateLayout());
++        if (asideRef.current) ro.observe(asideRef.current);
++        window.addEventListener('resize', updateLayout);
++        return () => {
++            window.removeEventListener('resize', updateLayout);
++            ro.disconnect();
++            document.body.classList.remove('chat-open', 'chat-overlay');
++            const vars = ['--chat-width', '--chat-open', '--chat-is-overlay', '--chat-drawer-width'];
++            vars.forEach((v) => document.documentElement.style.removeProperty(v));
++        };
++    }, [open]);
++
++    async function send(text) {
++        const content = text ?? input;
++        if (!content.trim()) return;
++        const next = [...msgs, { role: 'user', content }];
++        setMsgs(next);
++        if (!text) setInput('');
++        try {
++            setThinking(true);
++            const { data } = await axios.post('/api/chat', { messages: next });
++            setMsgs([...next, data.choices[0].message]);
++        } catch {
++            setMsgs([...next, { role: 'assistant', content: 'Erreur réseau' }]);
++        } finally {
++            setThinking(false);
++        }
++    }
++
++    // Efface toutes les réponses et questions mais conserve le contexte système
++    function clearChat() {
++        setMsgs((m) => m.filter((x) => x.role === 'system'));
++    }
++
++    // Confettis sur le badge marketing
++    const onBadgeDoubleClick = (e) => {
++        const rect = e.currentTarget.getBoundingClientRect();
++        fireConfettiFromRect(rect);
++    };
++
++    return (
++        <>
++            {/* Bouton flottant (mobile) */}
++            <button
++                onClick={() => setOpen((o) => !o)}
++                aria-label={open ? 'Fermer le chat' : 'Ouvrir le chat'}
++                className="lg:hidden fixed bottom-6 right-6 z-30 btn-primary rounded-full p-3 shadow-lg text-gray-900"
++            >
++                {open ? '✕' : '💬'}
++            </button>
++
++            {/* Panneau chat */}
++            <aside
++                ref={asideRef}
++                className={`fixed lg:static top-0 right-0 h-full lg:h-auto w-full lg:w-80 max-w-full card flex flex-col transform ${
++                    open ? 'translate-x-0' : 'translate-x-full lg:translate-x-0'
++                } transition`}
++                aria-live="polite"
++            >
++                {/* Header avec branding + capsule marketing */}
++                <div className="flex items-center justify-between p-4 border-b border-[--color-border] gap-2">
++                    <div className="flex items-center gap-2">
++                        <h3 className="font-semibold text-gray-900 tracking-tight">ALFHEIM AI</h3>
++                        <button
++                            type="button"
++                            onDoubleClick={onBadgeDoubleClick}
++                            title="Double-clique pour célébrer 🎉"
++                            className="relative select-none rounded-full px-3 py-1 text-[11px] font-semibold text-white bg-gradient-to-r from-violet-600 via-violet-700 to-black ring-1 ring-violet-400/40 shadow-sm hover:brightness-110 active:brightness-125"
++                        >
++                            Powered by GPT-5
++                        </button>
++                    </div>
++                    <div className="flex items-center gap-1">
++                        <button
++                            type="button"
++                            onClick={clearChat}
++                            className="btn-ghost h-8 px-2 text-gray-900"
++                            aria-label="Effacer la conversation"
++                        >
++                            🧹
++                        </button>
++                        <button
++                            className="lg:hidden btn-ghost h-8 px-2 text-gray-900"
++                            onClick={() => setOpen(false)}
++                            aria-label="Fermer"
++                        >
++                            ✕
++                        </button>
++                    </div>
++                </div>
++
++                {/* Liste des messages */}
++                <div className="flex-1 overflow-y-auto p-4 space-y-4">
++                    {msgs
++                        .filter((m) => m.role !== 'system')
++                        .map((m, i) => (
++                            <div key={i} className={`flex ${m.role === 'user' ? 'justify-end' : 'justify-start'}`}>
++                                <div className={`${m.role === 'user' ? 'bubble-user' : 'bubble-ai'} text-gray-900 relative`}>
++                                    {m.content}
++                                    {/* copie la réponse de l'IA dans le presse-papier */}
++                                    {m.role === 'assistant' && (
++                                        <button
++                                            type="button"
++                                            onClick={() => navigator.clipboard.writeText(m.content)}
++                                            className="absolute top-1 right-1 text-xs opacity-50 hover:opacity-80"
++                                            aria-label="Copier la réponse"
++                                        >
++                                            📋
++                                        </button>
++                                    )}
++                                </div>
++                            </div>
++                        ))}
++                    {thinking && (
++                        <div className="flex justify-start">
++                            <p className="bubble-ai text-gray-900 flex items-center">
++                                <span className="dot inline-block w-1.5 h-1.5 bg-black/50 rounded-full mx-0.5"></span>
++                                <span className="dot inline-block w-1.5 h-1.5 bg-black/50 rounded-full mx-0.5 [animation-delay:.15s]"></span>
++                                <span className="dot inline-block w-1.5 h-1.5 bg-black/50 rounded-full mx-0.5 [animation-delay:.3s]"></span>
++                            </p>
++                        </div>
++                    )}
++                    <div ref={bottom} />
++                </div>
++
++                {/* Zone de saisie */}
++                <div className="p-3 border-t border-[--color-border] bg-[--color-surface-2] flex gap-2">
++                    <textarea
++                        className="input resize-none"
++                        value={input}
++                        onChange={(e) => setInput(e.target.value)}
++                        onKeyDown={(e) => e.key === 'Enter' && !e.shiftKey && (e.preventDefault(), send())}
++                        rows="2"
++                        placeholder="Votre question…"
++                    />
++                    <button onClick={() => send()} className="btn-primary px-3 py-2 text-gray-900" aria-label="Envoyer">
++                        <svg
++                            xmlns="http://www.w3.org/2000/svg"
++                            viewBox="0 0 24 24"
++                            fill="none"
++                            stroke="currentColor"
++                            strokeWidth="1.5"
++                            className="w-5 h-5"
++                        >
++                            <path strokeLinecap="round" strokeLinejoin="round" d="M5 12h14M12 5l7 7-7 7" />
++                        </svg>
++                    </button>
++                </div>
++            </aside>
++        </>
++    );
++}
++
++export default forwardRef(ChatSidebar);
+\ No newline at end of file
+diff --git a/src/pages/ModelList.jsx b/src/pages/ModelList.jsx
+new file mode 100644
+index 0000000..d4032ef
+--- /dev/null
++++ b/src/pages/ModelList.jsx
+@@ -0,0 +1,96 @@
++import { useEffect, useState } from 'react';
++import { Link } from 'react-router-dom';
++import axios from 'axios';
++
++/**
++ * Page listant les environnements disponibles. On ajoute un état de chargement
++ * et un champ de recherche pour filtrer les environnements par titre ou sous‑titre.
++ */
++export default function ModelList() {
++    const [envs, setEnvs] = useState([]);
++    const [loading, setLoading] = useState(true);
++    const [query, setQuery] = useState('');
++
++    useEffect(() => {
++        axios
++            .get('/api/environments')
++            .then((r) => setEnvs(r.data))
++            .catch(() => setEnvs([]))
++            .finally(() => setLoading(false));
++    }, []);
++
++    // Filtrage côté client sur le titre et le sous‑titre
++    const filtered = envs.filter((env) => {
++        const q = query.toLowerCase();
++        return (
++            env.title?.toLowerCase().includes(q) ||
++            env.subtitle?.toLowerCase().includes(q)
++        );
++    });
++
++    if (loading) {
++        return (
++            <main className="page max-w-7xl mx-auto px-4 py-12">
++                <p className="text-gray-700">Chargement…</p>
++            </main>
++        );
++    }
++
++    return (
++        <main className="page max-w-7xl mx-auto px-4 py-12 space-y-8">
++            <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-4">
++                <h2 className="text-2xl font-semibold text-gray-900">
++                    Galerie des environnements
++                </h2>
++                <input
++                    type="search"
++                    placeholder="Rechercher…"
++                    value={query}
++                    onChange={(e) => setQuery(e.target.value)}
++                    className="input md:w-64"
++                />
++            </div>
++
++            {filtered.length === 0 ? (
++                <p className="text-gray-700">Aucun environnement enregistré.</p>
++            ) : (
++                <div className="grid gap-8 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
++                    {filtered.map((env) => (
++                        <Link
++                            key={env.id}
++                            to={`/model/${env.id}`}
++                            className="group card overflow-hidden transition hover:shadow-lg"
++                        >
++                            <div className="relative h-44 bg-gradient-to-br from-gray-100 to-gray-200">
++                                <div className="absolute inset-0 flex items-center justify-center hover-zoom">
++                                    <svg
++                                        className="w-12 h-12 text-violet-600"
++                                        viewBox="0 0 24 24"
++                                        fill="none"
++                                        stroke="currentColor"
++                                    >
++                                        <path
++                                            strokeLinecap="round"
++                                            strokeLinejoin="round"
++                                            strokeWidth="1.5"
++                                            d="M12 2l7 4v8l-7 4-7-4V6l7-4z"
++                                        />
++                                    </svg>
++                                </div>
++                                <div className="overlay-gradient" />
++                                <div className="absolute bottom-0 left-0 right-0 p-3">
++                                    <h3 className="font-medium truncate text-gray-900">
++                                        {env.title}
++                                    </h3>
++                                    <p className="text-xs text-gray-700 line-clamp-2">
++                                        {env.subtitle}
++                                    </p>
++                                </div>
++                            </div>
++                        </Link>
++                    ))}
++                </div>
++            )}
++        </main>
++    );
++}
+\ No newline at end of file
+-- 
+2.39.5
+
