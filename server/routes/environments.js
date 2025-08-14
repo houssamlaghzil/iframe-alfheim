@@ -1,3 +1,4 @@
+// src/routes/environments.js
 import { Router } from 'express';
 import { randomUUID } from 'crypto';
 
@@ -10,15 +11,17 @@ import {
     firebaseMediaUrl,
     resolveFileUrlForFront,
     buildProxyUrl,
-    isFirebaseTokenUrl,
 } from '../utils/urls.js';
-import { FORCE_PROXY_MODELS } from '../config/env.js';
 
 const router = Router();
 
-/** POST /api/environments  (title + file .glb en multipart)
- *  - Upload GLB → Storage (token Firebase)
- *  - Stocke en DB : fileUrlFirebase, fileUrlProxy, fileUrl (exposée)
+/**
+ * POST /api/environments
+ * - Reçoit title + file(.glb)
+ * - Upload Storage (avec token Firebase pour debug/backup)
+ * - Sauvegarde Firestore
+ * - Réponse: **fileUrl = proxy** (CORS safe) et on "empoisonne" aussi fileUrlFirebase dans la réponse
+ *   pour neutraliser un front qui lirait le mauvais champ.
  */
 router.post('/api/environments', upload.single('file'), async (req, res) => {
     const scope = 'ENV_UP';
@@ -33,62 +36,77 @@ router.post('/api/environments', upload.single('file'), async (req, res) => {
         if (!title) return res.status(400).json({ error: 'title requis' });
         if (!req.file) return res.status(400).json({ error: 'Fichier GLB manquant' });
 
+        // ID doc + chemins
         const id = db.collection(pathFor('environments')).doc().id;
         const docPath = pathFor('environments', id);
         const alias = randomUUID();
 
         const original = req.file.originalname || 'model.glb';
         const name = safeFileName(original.endsWith('.glb') ? original : `${original}.glb`);
-        // Chemin fichier (stabilisé pour logs/support)
         const dstPath = `${docPath.replace(/\//g, '_')}-${name}`;
 
+        // Upload Storage avec token Firebase (utile en debug/offline)
         const token = randomUUID();
         log(scope, `upload → ${bucket.name}/${dstPath}`, {
-            rid: req._rid, size: req.file.size, mime: req.file.mimetype, alias, docPath, FORCE_PROXY_MODELS,
+            rid: req._rid, size: req.file.size, mime: req.file.mimetype, alias, docPath,
         });
-
         await saveGlbWithToken(dstPath, req.file.buffer, token);
 
-        const fileUrlFirebase = firebaseMediaUrl(bucket.name, dstPath, token);
+        // On calcule les 2 URLs mais on *expose* le proxy partout
+        const fileUrlFirebaseRaw = firebaseMediaUrl(bucket.name, dstPath, token);
         const fileUrlProxy = buildProxyUrl(dstPath);
-        const fileUrl = FORCE_PROXY_MODELS ? fileUrlProxy : fileUrlFirebase;
 
+        // Contenu stocké en DB
         const doc = {
             title, subtitle, description,
             alias,
-            // on garde les 2 pour debug, mais on expose `fileUrl` dans les GET
-            fileUrl,
-            fileUrlFirebase,
-            fileUrlProxy,
             storagePath: dstPath,
             createdAt: Date.now(),
+            // On garde TOUT pour debug/audit:
+            fileUrl: fileUrlProxy,              // URL principale (toujours proxy)
+            fileUrlProxy,                       // duplicat explicite
+            fileUrlFirebaseRaw,                 // l'URL Firebase "brute" de référence (ne pas utiliser en front)
         };
 
+        // Écriture Firestore
         await db.doc(docPath).set(doc);
         log(scope, `write OK → ${docPath}`);
 
+        // Relecture pour vérif
         const after = await db.doc(docPath).get();
         log(scope, `readback exists=${after.exists} id=${id}`);
 
-        res.status(201).json({ id, docPath, writeVerified: after.exists, ...doc });
+        // ⚠️ RÉPONSE: on "empoisonne" aussi fileUrlFirebase pour neutraliser le front s'il se trompe de champ
+        res.status(201).json({
+            id,
+            docPath,
+            writeVerified: after.exists,
+            ...doc,
+            fileUrlFirebase: fileUrlProxy, // <- même valeur que fileUrl
+        });
     } catch (e) {
         errlog('ENV_UP', 'upload failed', e);
         res.status(500).json({ error: e?.message || 'Erreur serveur', rid: req._rid });
     }
 });
 
-/** GET /api/environments  (expose une URL safe pour le front) */
+/**
+ * GET /api/environments
+ * - Liste des envs
+ * - Forçage: fileUrl = proxy et on met aussi fileUrlFirebase = proxy
+ */
 router.get('/api/environments', async (_req, res) => {
     try {
         const colPath = pathFor('environments');
         const snap = await db.collection(colPath).get();
         const out = snap.docs.map(d => {
             const data = d.data();
-            const safeUrl = resolveFileUrlForFront(data);
+            const fileUrlSafe = resolveFileUrlForFront(data); // => proxy
             return {
                 id: d.id,
                 ...data,
-                fileUrl: safeUrl,
+                fileUrl: fileUrlSafe,
+                fileUrlFirebase: fileUrlSafe, // ← “empoisonné”
             };
         });
         log('ENV', `list (${colPath}) count=${out.length}`);
@@ -99,7 +117,10 @@ router.get('/api/environments', async (_req, res) => {
     }
 });
 
-/** GET /api/environments/raw  (sans réécriture d’URL, debug) */
+/**
+ * GET /api/environments/raw
+ * - Debug brut (aucune réécriture)
+ */
 router.get('/api/environments/raw', async (_req, res) => {
     try {
         const colPath = pathFor('environments');
@@ -113,14 +134,23 @@ router.get('/api/environments/raw', async (_req, res) => {
     }
 });
 
-/** GET /api/environments/:id  (expose URL safe) */
+/**
+ * GET /api/environments/:id
+ * - Détail d’un env (proxy forcé)
+ */
 router.get('/api/environments/:id', async (req, res) => {
     try {
         const ref = db.doc(pathFor('environments', req.params.id));
         const doc = await ref.get();
         if (!doc.exists) return res.sendStatus(404);
         const data = doc.data();
-        res.json({ id: doc.id, ...data, fileUrl: resolveFileUrlForFront(data) });
+        const fileUrlSafe = resolveFileUrlForFront(data); // => proxy
+        res.json({
+            id: doc.id,
+            ...data,
+            fileUrl: fileUrlSafe,
+            fileUrlFirebase: fileUrlSafe, // ← “empoisonné”
+        });
     } catch (e) {
         errlog('ENV', 'get error', e);
         res.sendStatus(500);

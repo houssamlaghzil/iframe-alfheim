@@ -1,4 +1,6 @@
-import { FORCE_PROXY_MODELS } from '../config/env.js';
+// src/utils/urls.js
+// Rôle: utilitaires d'URL. En frontal, on impose *systématiquement* le proxy
+// pour éviter tout CORS (même si l'URL Firebase serait "théoriquement" valable).
 
 export const isGcsSigned = (url) =>
     typeof url === 'string' && url.startsWith('https://storage.googleapis.com/');
@@ -15,15 +17,11 @@ export const buildProxyUrl = (storagePath) =>
     `/api/proxy-model?path=${encodeURIComponent(storagePath)}`;
 
 /**
- * Retourne une URL **safe** pour le front.
- * - Si FORCE_PROXY_MODELS=true → toujours le proxy (notre domaine).
- * - Sinon → garde l’URL Firebase + token si dispo, sinon proxy si storagePath dispo.
+ * Retourne l'URL à utiliser côté front:
+ * - si storagePath dispo → **toujours** le proxy (notre domaine) => CORS OK
+ * - sinon on tente fileUrl (best effort)
  */
 export const resolveFileUrlForFront = (doc) => {
-    if (FORCE_PROXY_MODELS && doc.storagePath) {
-        return buildProxyUrl(doc.storagePath);
-    }
-    if (isFirebaseTokenUrl(doc.fileUrl)) return doc.fileUrl;
-    if (doc.storagePath) return buildProxyUrl(doc.storagePath);
-    return doc.fileUrl || null;
+    if (doc?.storagePath) return buildProxyUrl(doc.storagePath);
+    return doc?.fileUrl || null;
 };
