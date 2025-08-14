@@ -10,7 +10,7 @@ import OpenAI from 'openai';
 
 dotenv.config();
 
-/* ----------------------- LOGGING UTILS ----------------------- */
+/* ----------------------- LOGGING ----------------------- */
 const tstamp = () => new Date().toISOString();
 const log = (s, m, x) => x !== undefined ? console.log(`[${tstamp()}] [${s}] ${m}`, x)
     : console.log(`[${tstamp()}] [${s}] ${m}`);
@@ -21,18 +21,10 @@ const errlog = (s, m, x) => x !== undefined ? console.error(`[${tstamp()}] [${s}
 
 /* ----------------------- ENV ----------------------- */
 const CLIENT_ID = process.env.CLIENT_ID || '1';
-if (!process.env.FIREBASE_SA) {
-    errlog('BOOT', 'FIREBASE_SA manquant dans .env');
-    process.exit(1);
-}
-
+if (!process.env.FIREBASE_SA) { errlog('BOOT', 'FIREBASE_SA manquant'); process.exit(1); }
 let serviceAccount;
-try {
-    serviceAccount = JSON.parse(process.env.FIREBASE_SA);
-} catch (e) {
-    errlog('BOOT', 'FIREBASE_SA JSON invalide', e?.message);
-    process.exit(1);
-}
+try { serviceAccount = JSON.parse(process.env.FIREBASE_SA); }
+catch (e) { errlog('BOOT', 'FIREBASE_SA JSON invalide', e?.message); process.exit(1); }
 
 const providedBucket = (process.env.FIREBASE_STORAGE_BUCKET || '').trim();
 log('BOOT', `Project: ${serviceAccount.project_id}`);
@@ -65,7 +57,6 @@ async function checkBucket(name) {
         return { exists: false, error: e?.message || String(e) };
     }
 }
-
 async function resolveBucket() {
     for (const name of candidates) {
         const r = await checkBucket(name);
@@ -97,7 +88,7 @@ app.use((req, _res, next) => {
     next();
 });
 
-// multer: mémoire uniquement (pas d’écritures disque)
+// multer (mémoire)
 const upload = multer({
     storage: multer.memoryStorage(),
     fileFilter: (_req, file, cb) => {
@@ -117,6 +108,31 @@ const pathFor = (...segs) => ['clients', String(CLIENT_ID), ...segs].join('/');
 const safeFileName = (n) =>
     (n || 'model.glb').replace(/\s+/g, '_').replace(/[^a-zA-Z0-9._-]/g, '');
 
+/* ----------------------- UTILS URL ----------------------- */
+const isGcsSigned = (url) =>
+    typeof url === 'string' && url.startsWith('https://storage.googleapis.com/');
+const isFirebaseTokenUrl = (url) =>
+    typeof url === 'string' && url.startsWith('https://firebasestorage.googleapis.com/v0/b/');
+
+function firebaseMediaUrl(bucketName, storagePath, token) {
+    const encoded = encodeURIComponent(storagePath);
+    return `https://firebasestorage.googleapis.com/v0/b/${bucketName}/o/${encoded}?alt=media&token=${token}`;
+}
+
+/** Retourne une URL *sûre CORS* pour le front :
+ * - si fileUrl est déjà Firebase (token) → la garde
+ * - sinon, si storagePath existe → proxy local
+ * - sinon → fileUrl (meilleur effort)
+ */
+function resolveFileUrlForFront(doc) {
+    if (isFirebaseTokenUrl(doc.fileUrl)) return doc.fileUrl;
+    if (doc.storagePath) {
+        // évite CORS : on passe par le proxy local
+        return `/api/proxy-model?path=${encodeURIComponent(doc.storagePath)}`;
+    }
+    return doc.fileUrl || null;
+}
+
 /* ----------------------- DEBUG ----------------------- */
 app.get('/healthz', (_req, res) => {
     res.json({
@@ -126,7 +142,6 @@ app.get('/healthz', (_req, res) => {
         hasBucket: Boolean(selectedBucket),
     });
 });
-
 app.get('/debug/storage', async (_req, res) => {
     const results = [];
     for (const name of candidates) {
@@ -138,15 +153,13 @@ app.get('/debug/storage', async (_req, res) => {
         candidates: results,
         selected: selectedBucket?.name || null,
         hint: !results.some(r => r.exists)
-            ? 'Active Firebase Storage dans la console → Storage → Get started. Le nom exact apparaît sous la forme gs://<nom>.'
+            ? 'Active Firebase Storage dans la console → Storage → Get started. Le nom exact apparaît sous gs://<nom>.'
             : 'OK',
     });
 });
 
-/* ----------------------- (Optionnel) SET CORS SUR BUCKET -----------------------
-   Utile si tu veux conserver les signed URLs GCS (storage.googleapis.com).
-   S’il te faut cette option A), appelle POST /debug/set-cors une fois. */
-app.post('/debug/set-cors', async (req, res) => {
+/* ----------------------- (Optionnel) Écrire CORS sur le bucket (pour GCS) ----------------------- */
+app.post('/debug/set-cors', async (_req, res) => {
     try {
         if (!selectedBucket) return res.status(500).json({ error: 'Bucket non sélectionné' });
         const origins = [
@@ -157,7 +170,7 @@ app.post('/debug/set-cors', async (req, res) => {
         await selectedBucket.setCors([{
             origin: origins,
             method: ['GET', 'HEAD', 'OPTIONS'],
-            responseHeader: ['Content-Type'],
+            responseHeader: ['Content-Type', 'Accept', 'Origin'],
             maxAgeSeconds: 3600,
         }]);
         const [meta] = await selectedBucket.getMetadata();
@@ -180,7 +193,6 @@ app.get('/api/environments/:envId/pois', async (req, res) => {
         res.json([]);
     }
 });
-
 app.post('/api/environments/:envId/pois', async (req, res) => {
     try {
         const data = { ...req.body, updatedAt: Date.now() };
@@ -193,18 +205,13 @@ app.post('/api/environments/:envId/pois', async (req, res) => {
     }
 });
 
-/* ----------------------- ENVIRONMENTS + UPLOAD -----------------------
-   FIX CORS : on génère un token Firebase et on renvoie l’URL:
-   https://firebasestorage.googleapis.com/v0/b/<bucket>/o/<path>?alt=media&token=<token>
-   => CORS OK pour fetch() et useGLTF() */
+/* ----------------------- UPLOAD (nouveaux fichiers = URL Firebase token) ----------------------- */
 app.post('/api/environments', upload.single('file'), async (req, res) => {
     const scope = 'ENV_UP';
     try {
         if (!selectedBucket) {
             warn(scope, 'Aucun bucket sélectionné — upload impossible. Vérifie /debug/storage');
-            return res.status(500).json({
-                error: 'Bucket introuvable. Active Firebase Storage et/ou corrige FIREBASE_STORAGE_BUCKET.',
-            });
+            return res.status(500).json({ error: 'Bucket introuvable.' });
         }
 
         const { title, subtitle = '', description = '' } = req.body || {};
@@ -212,14 +219,14 @@ app.post('/api/environments', upload.single('file'), async (req, res) => {
         if (!req.file) return res.status(400).json({ error: 'Fichier GLB manquant' });
 
         const id = db.collection(pathFor('environments')).doc().id;
+        const alias = randomUUID();
         const original = req.file.originalname || 'model.glb';
         const name = safeFileName(original.endsWith('.glb') ? original : `${original}.glb`);
         const dstPath = `${CLIENT_ID}/models/${Date.now()}-${name}`;
+        const token = randomUUID(); // token Firebase
 
-        const token = randomUUID(); // token de téléchargement Firebase
         log(scope, `upload → ${selectedBucket.name}/${dstPath}`, {
-            size: req.file.size,
-            mime: req.file.mimetype,
+            size: req.file.size, mime: req.file.mimetype, alias,
         });
 
         const gcsFile = selectedBucket.file(dstPath);
@@ -232,20 +239,12 @@ app.post('/api/environments', upload.single('file'), async (req, res) => {
             },
         });
 
-        // URL Firebase (CORS OK)
-        const encodedPath = encodeURIComponent(dstPath);
-        const firebaseUrl = `https://firebasestorage.googleapis.com/v0/b/${selectedBucket.name}/o/${encodedPath}?alt=media&token=${token}`;
-
-        // (optionnel) aussi une signed URL GCS si tu en as besoin ailleurs (mais CORS à configurer si fetch côté client)
-        // const [signedUrl] = await gcsFile.getSignedUrl({
-        //   action: 'read',
-        //   expires: Date.now() + 1000 * 60 * 60 * 24 * 365,
-        // });
+        const firebaseUrl = firebaseMediaUrl(selectedBucket.name, dstPath, token);
 
         const doc = {
             title, subtitle, description,
-            fileUrl: firebaseUrl,     // <= utilise ça côté front/useGLTF
-            // signedUrl,             // <= décommente si tu veux aussi la version GCS
+            alias,
+            fileUrl: firebaseUrl,   // CORS OK pour le front
             storagePath: dstPath,
             createdAt: Date.now(),
         };
@@ -259,32 +258,66 @@ app.post('/api/environments', upload.single('file'), async (req, res) => {
     }
 });
 
-/* ----------------------- LECTURE LIST/GET ----------------------- */
+/* ----------------------- LIST/GET (réécrit fileUrl pour éviter CORS) ----------------------- */
 app.get('/api/environments', async (_req, res) => {
     try {
         const snap = await db.collection(pathFor('environments')).get();
-        res.json(snap.docs.map(d => ({ id: d.id, ...d.data() })));
+        const out = snap.docs.map(d => {
+            const data = d.data();
+            const safeUrl = resolveFileUrlForFront(data);
+            return { id: d.id, ...data, fileUrl: safeUrl };
+        });
+        log('ENV', `list count=${out.length}`);
+        res.json(out);
     } catch (e) {
         errlog('ENV', 'list error', e);
         res.json([]);
     }
 });
-
 app.get('/api/environments/:id', async (req, res) => {
     try {
-        const doc = await db.doc(pathFor('environments', req.params.id)).get();
+        const ref = db.doc(pathFor('environments', req.params.id));
+        const doc = await ref.get();
         if (!doc.exists) return res.sendStatus(404);
-        res.json({ id: doc.id, ...doc.data() });
+        const data = doc.data();
+        const safeUrl = resolveFileUrlForFront(data);
+        res.json({ id: doc.id, ...data, fileUrl: safeUrl });
     } catch (e) {
         errlog('ENV', 'get error', e);
         res.sendStatus(500);
     }
 });
 
-/* ----------------------- (Optionnel) PROXY DE SECOURS -----------------------
-   Si vraiment nécessaire, tu peux charger le GLB via ton domaine :
-   /api/proxy-model?path=clients/<CLIENT_ID>/models/xxx.glb
-   → ajoute CORS: * (mais attention au coût bande passante serveur) */
+/* ----------------------- LEGACY /files/:alias(.glb)? ----------------------- */
+app.get('/files/:alias', async (req, res) => {
+    try {
+        if (!selectedBucket) return res.status(500).send('Bucket non sélectionné');
+        let alias = String(req.params.alias || '');
+        if (alias.toLowerCase().endsWith('.glb')) alias = alias.slice(0, -4);
+
+        const q = await db.collection(pathFor('environments'))
+            .where('alias', '==', alias).limit(1).get();
+
+        if (q.empty) { warn('FILES', `alias introuvable: ${alias}`); return res.status(404).send('Not found'); }
+
+        const { storagePath } = q.docs[0].data();
+        if (!storagePath) return res.status(404).send('Not found');
+
+        res.setHeader('Access-Control-Allow-Origin', '*');
+        res.setHeader('Content-Type', 'model/gltf-binary');
+        res.setHeader('Cache-Control', 'public, max-age=31536000, immutable');
+
+        selectedBucket.file(storagePath)
+            .createReadStream({ validation: false })
+            .on('error', (e) => { errlog('FILES', 'stream error', e); res.destroy(e); })
+            .pipe(res);
+    } catch (e) {
+        errlog('FILES', 'failed', e);
+        res.status(500).send('files error');
+    }
+});
+
+/* ----------------------- PROXY DIRECT ----------------------- */
 app.get('/api/proxy-model', async (req, res) => {
     try {
         if (!selectedBucket) return res.status(500).send('Bucket non sélectionné');
@@ -300,14 +333,55 @@ app.get('/api/proxy-model', async (req, res) => {
         res.setHeader('Cache-Control', 'public, max-age=31536000, immutable');
 
         file.createReadStream({ validation: false })
-            .on('error', (e) => {
-                errlog('PROXY', 'stream error', e);
-                res.destroy(e);
-            })
+            .on('error', (e) => { errlog('PROXY', 'stream error', e); res.destroy(e); })
             .pipe(res);
     } catch (e) {
         errlog('PROXY', 'failed', e);
         res.status(500).send('proxy error');
+    }
+});
+
+/* ----------------------- ADMIN: MIGRATION VERS URL FIREBASE -----------------------
+   - Ajoute un token aux fichiers sans token
+   - Écrit fileUrl = firebase URL (CORS OK)
+*/
+app.post('/admin/migrate-urls', async (_req, res) => {
+    try {
+        if (!selectedBucket) return res.status(500).json({ error: 'Bucket non sélectionné' });
+
+        const col = db.collection(pathFor('environments'));
+        const snap = await col.get();
+        let updated = 0;
+        for (const doc of snap.docs) {
+            const data = doc.data();
+            // déjà OK
+            if (isFirebaseTokenUrl(data.fileUrl)) continue;
+            if (!data.storagePath) continue;
+
+            const gcsFile = selectedBucket.file(data.storagePath);
+            const [exists] = await gcsFile.exists();
+            if (!exists) { warn('MIGRATE', `manquant: ${data.storagePath}`); continue; }
+
+            const [meta] = await gcsFile.getMetadata();
+            let token = meta.metadata?.firebaseStorageDownloadTokens;
+            if (!token) {
+                token = randomUUID();
+                await gcsFile.setMetadata({
+                    metadata: { firebaseStorageDownloadTokens: token },
+                    cacheControl: 'public, max-age=31536000, immutable',
+                    contentType: 'model/gltf-binary',
+                });
+            }
+            const newUrl = firebaseMediaUrl(selectedBucket.name, data.storagePath, token);
+            await doc.ref.set({ fileUrl: newUrl }, { merge: true });
+            updated++;
+            log('MIGRATE', `doc ${doc.id} → Firebase URL`);
+        }
+
+        res.json({ ok: true, updated, total: snap.size });
+    } catch (e) {
+        errlog('MIGRATE', 'failed', e);
+        res.status(500).json({ error: e?.message || 'migration error' });
     }
 });
 
@@ -332,7 +406,6 @@ app.listen(PORT, async () => {
     log('BOOT', `API (${CLIENT_ID}) → http://localhost:${PORT}`);
     await resolveBucket();
     if (!selectedBucket) {
-        errlog('BOOT', 'Aucun bucket valide détecté.');
-        errlog('BOOT', '👉 Vérifie le nom exact dans la console (gs://...) et/ou active Storage.');
+        errlog('BOOT', 'Aucun bucket valide détecté. Active Storage et/ou corrige FIREBASE_STORAGE_BUCKET.');
     }
 });
