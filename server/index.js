@@ -11,6 +11,18 @@ import OpenAI from 'openai';
 
 dotenv.config();
 
+// Récupération de l'ID client depuis les variables d'environnement
+const CLIENT_ID = process.env.CLIENT_ID;
+if (!CLIENT_ID) {
+    console.error("❌ CLIENT_ID manquant dans .env");
+    process.exit(1);
+}
+
+// Helper pour générer un chemin Firestore avec préfixe client
+function pathFor(...segments) {
+    return ['clients', CLIENT_ID, ...segments].join('/');
+}
+
 /* Dossiers racine/uploads (chemins absolus) -------------------------------- */
 const ROOT_DIR = path.resolve();
 const UPLOADS_DIR = path.join(ROOT_DIR, 'uploads');
@@ -24,8 +36,6 @@ const db = getFirestore();
 /* App ---------------------------------------------------------------------- */
 const app = express();
 app.use(cors());
-
-// Autoriser jusqu'à 1 Go pour les JSON et les formulaires
 app.use(express.json({ limit: '1024mb' }));
 app.use(express.urlencoded({ limit: '1024mb', extended: true }));
 
@@ -46,16 +56,13 @@ const upload = multer({
     limits: { fileSize: 1024 * 1024 * 1024 } // 1 Go
 });
 
-/* -------------------------------------------------------------------------- */
-/*  ROUTES                                                                    */
-/* -------------------------------------------------------------------------- */
-
-/* ---------- POI (déclaré AVANT /:id) ------------------------------------- */
+/* ---------- POI ----------------------------------------------------------- */
 app.get('/api/environments/:envId/pois', async (req, res) => {
     try {
-        const snap = await db.collection(`environments/${req.params.envId}/pois`).get();
+        const snap = await db.collection(pathFor('environments', req.params.envId, 'pois')).get();
         res.json(snap.docs.map(d => ({ id: d.id, ...d.data() })));
-    } catch {
+    } catch (e) {
+        console.error("GET /pois", e);
         res.json([]);
     }
 });
@@ -63,9 +70,9 @@ app.get('/api/environments/:envId/pois', async (req, res) => {
 app.post('/api/environments/:envId/pois', async (req, res) => {
     try {
         const data = { ...req.body, updatedAt: Date.now() };
-        const ref  = db.doc(`environments/${req.params.envId}/pois/${data.id}`);
+        const ref  = db.doc(pathFor('environments', req.params.envId, 'pois', data.id));
         await ref.set(data, { merge: true });
-        console.log('🔥 POI upsert', req.params.envId, data.id);
+        console.log('🔥 POI upsert', CLIENT_ID, req.params.envId, data.id);
         res.status(201).json({ id: ref.id });
     } catch (e) {
         console.error('POST /pois', e);
@@ -73,18 +80,19 @@ app.post('/api/environments/:envId/pois', async (req, res) => {
     }
 });
 
-/* ---------- ENVIRONNEMENTS ----------------------------------------------- */
+/* ---------- ENVIRONNEMENTS ------------------------------------------------ */
 app.post('/api/environments', upload.single('file'), async (req, res) => {
     try {
         const { title, subtitle, description } = req.body;
-        if (!title || !req.file) return res.status(400).json({ error: 'Data missing or invalid file (GLB required)' });
+        if (!title || !req.file) {
+            return res.status(400).json({ error: 'Data missing or invalid file (GLB required)' });
+        }
 
-        // Le fichier est déjà écrit dans UPLOADS_DIR avec un nom UUID.glb par multer
-        const id = db.collection('environments').doc().id;
+        const id = db.collection(pathFor('environments')).doc().id;
         const fileUrl = `/files/${req.file.filename}`;
-
         const doc = { title, subtitle, description, fileUrl, createdAt: Date.now() };
-        await db.doc(`environments/${id}`).set(doc);
+
+        await db.doc(pathFor('environments', id)).set(doc);
         res.status(201).json({ id, ...doc });
     } catch (e) {
         console.error('POST /api/environments', e);
@@ -93,13 +101,23 @@ app.post('/api/environments', upload.single('file'), async (req, res) => {
 });
 
 app.get('/api/environments', async (_req, res) => {
-    const snap = await db.collection('environments').get();
-    res.json(snap.docs.map(d => ({ id: d.id, ...d.data() })));
+    try {
+        const snap = await db.collection(pathFor('environments')).get();
+        res.json(snap.docs.map(d => ({ id: d.id, ...d.data() })));
+    } catch (e) {
+        console.error("GET /api/environments", e);
+        res.json([]);
+    }
 });
 
 app.get('/api/environments/:id', async (req, res) => {
-    const doc = await db.doc(`environments/${req.params.id}`).get();
-    doc.exists ? res.json({ id: doc.id, ...doc.data() }) : res.sendStatus(404);
+    try {
+        const doc = await db.doc(pathFor('environments', req.params.id)).get();
+        doc.exists ? res.json({ id: doc.id, ...doc.data() }) : res.sendStatus(404);
+    } catch (e) {
+        console.error("GET /api/environments/:id", e);
+        res.sendStatus(500);
+    }
 });
 
 /* ---------- CHAT ---------------------------------------------------------- */
@@ -127,4 +145,4 @@ app.use('/files', express.static(UPLOADS_DIR, {
 }));
 
 /* -------------------------------------------------------------------------- */
-app.listen(4000, () => console.log('API → http://localhost:4000'));
+app.listen(4000, () => console.log(`API (${CLIENT_ID}) → http://localhost:4000`));
