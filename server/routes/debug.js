@@ -1,8 +1,8 @@
 import { Router } from 'express';
-import { db } from '../config/firebaseAdmin.js';
-import { CLIENT_ID } from '../config/env.js';
-import { getSelectedBucket, setBucketCors, resolveBucket } from '../services/storage.js';
+import { CLIENT_ID, FORCE_PROXY_MODELS } from '../config/env.js';
+import { getSelectedBucket, resolveBucket, setBucketCors } from '../services/storage.js';
 import { pathFor } from '../utils/path.js';
+import { db } from '../config/firebaseAdmin.js';
 import { log, errlog } from '../utils/logger.js';
 
 const router = Router();
@@ -13,11 +13,11 @@ router.get('/healthz', async (_req, res) => {
         clientId: CLIENT_ID,
         bucket: getSelectedBucket()?.name || null,
         hasBucket: Boolean(getSelectedBucket()),
+        FORCE_PROXY_MODELS,
     });
 });
 
 router.get('/debug/storage', async (_req, res) => {
-    // Appelle resolveBucket pour (ré)évaluer au besoin
     await resolveBucket();
     res.json({
         selected: getSelectedBucket()?.name || null,
@@ -40,7 +40,6 @@ router.post('/debug/set-cors', async (_req, res) => {
     }
 });
 
-// Contrôle rapide Firestore
 router.get('/debug/fs-check', async (_req, res) => {
     try {
         const colPath = pathFor('environments');

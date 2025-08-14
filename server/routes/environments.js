@@ -6,15 +6,19 @@ import { log, warn, errlog } from '../utils/logger.js';
 import { db } from '../config/firebaseAdmin.js';
 import { getSelectedBucket, saveGlbWithToken } from '../services/storage.js';
 import { pathFor, safeFileName } from '../utils/path.js';
-import { firebaseMediaUrl, resolveFileUrlForFront, isFirebaseTokenUrl } from '../utils/urls.js';
+import {
+    firebaseMediaUrl,
+    resolveFileUrlForFront,
+    buildProxyUrl,
+    isFirebaseTokenUrl,
+} from '../utils/urls.js';
+import { FORCE_PROXY_MODELS } from '../config/env.js';
 
 const router = Router();
 
-/**
- * POST /api/environments
- * form-data: title (string), subtitle?, description?, file (.glb)
- * -> crée doc Firestore sous clients/<CLIENT_ID>/environments/<id>
- * -> upload GLB vers Storage + URL Firebase (token)
+/** POST /api/environments  (title + file .glb en multipart)
+ *  - Upload GLB → Storage (token Firebase)
+ *  - Stocke en DB : fileUrlFirebase, fileUrlProxy, fileUrl (exposée)
  */
 router.post('/api/environments', upload.single('file'), async (req, res) => {
     const scope = 'ENV_UP';
@@ -35,20 +39,27 @@ router.post('/api/environments', upload.single('file'), async (req, res) => {
 
         const original = req.file.originalname || 'model.glb';
         const name = safeFileName(original.endsWith('.glb') ? original : `${original}.glb`);
-        const dstPath = `${docPath.replace(/\//g, '_')}-${name}`; // unique & lisible
-        const token = randomUUID();
+        // Chemin fichier (stabilisé pour logs/support)
+        const dstPath = `${docPath.replace(/\//g, '_')}-${name}`;
 
+        const token = randomUUID();
         log(scope, `upload → ${bucket.name}/${dstPath}`, {
-            size: req.file.size, mime: req.file.mimetype, alias, docPath,
+            rid: req._rid, size: req.file.size, mime: req.file.mimetype, alias, docPath, FORCE_PROXY_MODELS,
         });
 
         await saveGlbWithToken(dstPath, req.file.buffer, token);
-        const firebaseUrl = firebaseMediaUrl(bucket.name, dstPath, token);
+
+        const fileUrlFirebase = firebaseMediaUrl(bucket.name, dstPath, token);
+        const fileUrlProxy = buildProxyUrl(dstPath);
+        const fileUrl = FORCE_PROXY_MODELS ? fileUrlProxy : fileUrlFirebase;
 
         const doc = {
             title, subtitle, description,
             alias,
-            fileUrl: firebaseUrl,   // CORS OK
+            // on garde les 2 pour debug, mais on expose `fileUrl` dans les GET
+            fileUrl,
+            fileUrlFirebase,
+            fileUrlProxy,
             storagePath: dstPath,
             createdAt: Date.now(),
         };
@@ -66,17 +77,19 @@ router.post('/api/environments', upload.single('file'), async (req, res) => {
     }
 });
 
-/**
- * GET /api/environments
- * -> liste réécrite (fileUrl CORS-safe)
- */
+/** GET /api/environments  (expose une URL safe pour le front) */
 router.get('/api/environments', async (_req, res) => {
     try {
         const colPath = pathFor('environments');
         const snap = await db.collection(colPath).get();
         const out = snap.docs.map(d => {
             const data = d.data();
-            return { id: d.id, ...data, fileUrl: resolveFileUrlForFront(data) };
+            const safeUrl = resolveFileUrlForFront(data);
+            return {
+                id: d.id,
+                ...data,
+                fileUrl: safeUrl,
+            };
         });
         log('ENV', `list (${colPath}) count=${out.length}`);
         res.json(out);
@@ -86,10 +99,7 @@ router.get('/api/environments', async (_req, res) => {
     }
 });
 
-/**
- * GET /api/environments/raw
- * -> debug brut, sans réécriture d’URL
- */
+/** GET /api/environments/raw  (sans réécriture d’URL, debug) */
 router.get('/api/environments/raw', async (_req, res) => {
     try {
         const colPath = pathFor('environments');
@@ -103,9 +113,7 @@ router.get('/api/environments/raw', async (_req, res) => {
     }
 });
 
-/**
- * GET /api/environments/:id
- */
+/** GET /api/environments/:id  (expose URL safe) */
 router.get('/api/environments/:id', async (req, res) => {
     try {
         const ref = db.doc(pathFor('environments', req.params.id));

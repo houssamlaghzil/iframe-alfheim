@@ -26,6 +26,11 @@ else warn('ENV', 'FIREBASE_STORAGE_BUCKET non fourni — tentative de détection
 
 export const BUCKET_CANDIDATES = [
     providedBucket,
-    `${serviceAccount.project_id}.firebasestorage.app`, // nouveau format
-    `${serviceAccount.project_id}.appspot.com`,        // ancien format
+    `${serviceAccount.project_id}.firebasestorage.app`,
+    `${serviceAccount.project_id}.appspot.com`,
 ].filter(Boolean);
+
+/** Force le proxy (notre domaine) pour servir les .glb (évite CORS Firebase). */
+export const FORCE_PROXY_MODELS =
+    String(process.env.FORCE_PROXY_MODELS ?? 'true').toLowerCase() !== 'false';
+log('ENV', `FORCE_PROXY_MODELS=${FORCE_PROXY_MODELS}`);
