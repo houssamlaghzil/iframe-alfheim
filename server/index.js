@@ -109,25 +109,15 @@ const safeFileName = (n) =>
     (n || 'model.glb').replace(/\s+/g, '_').replace(/[^a-zA-Z0-9._-]/g, '');
 
 /* ----------------------- UTILS URL ----------------------- */
-const isGcsSigned = (url) =>
-    typeof url === 'string' && url.startsWith('https://storage.googleapis.com/');
 const isFirebaseTokenUrl = (url) =>
     typeof url === 'string' && url.startsWith('https://firebasestorage.googleapis.com/v0/b/');
-
 function firebaseMediaUrl(bucketName, storagePath, token) {
     const encoded = encodeURIComponent(storagePath);
     return `https://firebasestorage.googleapis.com/v0/b/${bucketName}/o/${encoded}?alt=media&token=${token}`;
 }
-
-/** Retourne une URL *sûre CORS* pour le front :
- * - si fileUrl est déjà Firebase (token) → la garde
- * - sinon, si storagePath existe → proxy local
- * - sinon → fileUrl (meilleur effort)
- */
 function resolveFileUrlForFront(doc) {
     if (isFirebaseTokenUrl(doc.fileUrl)) return doc.fileUrl;
     if (doc.storagePath) {
-        // évite CORS : on passe par le proxy local
         return `/api/proxy-model?path=${encodeURIComponent(doc.storagePath)}`;
     }
     return doc.fileUrl || null;
@@ -158,27 +148,22 @@ app.get('/debug/storage', async (_req, res) => {
     });
 });
 
-/* ----------------------- (Optionnel) Écrire CORS sur le bucket (pour GCS) ----------------------- */
-app.post('/debug/set-cors', async (_req, res) => {
+/* --- Vérif Firestore : compte/retour d’IDs dans la sous-collection ---------------- */
+app.get('/debug/fs-check', async (_req, res) => {
     try {
-        if (!selectedBucket) return res.status(500).json({ error: 'Bucket non sélectionné' });
-        const origins = [
-            'https://alfheim.promete.tech',
-            'http://localhost:5173',
-            'http://localhost:3000',
-        ];
-        await selectedBucket.setCors([{
-            origin: origins,
-            method: ['GET', 'HEAD', 'OPTIONS'],
-            responseHeader: ['Content-Type', 'Accept', 'Origin'],
-            maxAgeSeconds: 3600,
-        }]);
-        const [meta] = await selectedBucket.getMetadata();
-        log('CORS', 'CORS appliqué', meta.cors || []);
-        res.json({ ok: true, cors: meta.cors || [] });
+        const colPath = pathFor('environments');
+        const snap = await db.collection(colPath).orderBy('createdAt', 'desc').limit(10).get();
+        const ids = snap.docs.map(d => d.id);
+        res.json({
+            clientId: CLIENT_ID,
+            collectionPath: colPath,
+            countLast10: snap.size,
+            ids,
+            note: 'Dans la console: Collection "clients" → Doc CLIENT_ID → Sous-collection "environments".',
+        });
     } catch (e) {
-        errlog('CORS', 'set-cors failed', e);
-        res.status(500).json({ error: e?.message || 'CORS set failed' });
+        errlog('FS-CHECK', 'error', e);
+        res.status(500).json({ error: e?.message || 'fs-check error' });
     }
 });
 
@@ -219,6 +204,7 @@ app.post('/api/environments', upload.single('file'), async (req, res) => {
         if (!req.file) return res.status(400).json({ error: 'Fichier GLB manquant' });
 
         const id = db.collection(pathFor('environments')).doc().id;
+        const docPath = pathFor('environments', id); // <-- chemin exact du doc
         const alias = randomUUID();
         const original = req.file.originalname || 'model.glb';
         const name = safeFileName(original.endsWith('.glb') ? original : `${original}.glb`);
@@ -226,7 +212,7 @@ app.post('/api/environments', upload.single('file'), async (req, res) => {
         const token = randomUUID(); // token Firebase
 
         log(scope, `upload → ${selectedBucket.name}/${dstPath}`, {
-            size: req.file.size, mime: req.file.mimetype, alias,
+            size: req.file.size, mime: req.file.mimetype, alias, docPath,
         });
 
         const gcsFile = selectedBucket.file(dstPath);
@@ -248,10 +234,16 @@ app.post('/api/environments', upload.single('file'), async (req, res) => {
             storagePath: dstPath,
             createdAt: Date.now(),
         };
-        await db.doc(pathFor('environments', id)).set(doc);
 
-        log(scope, `done id=${id} urlLen=${firebaseUrl.length}`);
-        res.status(201).json({ id, ...doc });
+        // ÉCRITURE
+        await db.doc(docPath).set(doc);
+        log(scope, `write OK → ${docPath}`);
+
+        // RELECTURE IMMÉDIATE
+        const after = await db.doc(docPath).get();
+        log(scope, `readback exists=${after.exists} id=${id}`);
+
+        res.status(201).json({ id, docPath, writeVerified: after.exists, ...doc });
     } catch (e) {
         errlog('ENV_UP', 'upload failed', e);
         res.status(500).json({ error: e?.message || 'Erreur serveur', rid: req._rid, bucket: selectedBucket?.name || null });
@@ -261,19 +253,35 @@ app.post('/api/environments', upload.single('file'), async (req, res) => {
 /* ----------------------- LIST/GET (réécrit fileUrl pour éviter CORS) ----------------------- */
 app.get('/api/environments', async (_req, res) => {
     try {
-        const snap = await db.collection(pathFor('environments')).get();
+        const colPath = pathFor('environments');
+        const snap = await db.collection(colPath).get();
         const out = snap.docs.map(d => {
             const data = d.data();
             const safeUrl = resolveFileUrlForFront(data);
             return { id: d.id, ...data, fileUrl: safeUrl };
         });
-        log('ENV', `list count=${out.length}`);
+        log('ENV', `list (${colPath}) count=${out.length}`);
         res.json(out);
     } catch (e) {
         errlog('ENV', 'list error', e);
         res.json([]);
     }
 });
+
+// RAW: utile pour controler ce qui est en DB (sans réécriture d’URL)
+app.get('/api/environments/raw', async (_req, res) => {
+    try {
+        const colPath = pathFor('environments');
+        const snap = await db.collection(colPath).get();
+        const out = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+        log('ENV', `raw list (${colPath}) count=${out.length}`);
+        res.json(out);
+    } catch (e) {
+        errlog('ENV', 'raw list error', e);
+        res.json([]);
+    }
+});
+
 app.get('/api/environments/:id', async (req, res) => {
     try {
         const ref = db.doc(pathFor('environments', req.params.id));
@@ -341,10 +349,7 @@ app.get('/api/proxy-model', async (req, res) => {
     }
 });
 
-/* ----------------------- ADMIN: MIGRATION VERS URL FIREBASE -----------------------
-   - Ajoute un token aux fichiers sans token
-   - Écrit fileUrl = firebase URL (CORS OK)
-*/
+/* ----------------------- ADMIN: MIGRATION VERS URL FIREBASE ----------------------- */
 app.post('/admin/migrate-urls', async (_req, res) => {
     try {
         if (!selectedBucket) return res.status(500).json({ error: 'Bucket non sélectionné' });
@@ -354,7 +359,6 @@ app.post('/admin/migrate-urls', async (_req, res) => {
         let updated = 0;
         for (const doc of snap.docs) {
             const data = doc.data();
-            // déjà OK
             if (isFirebaseTokenUrl(data.fileUrl)) continue;
             if (!data.storagePath) continue;
 
